@@ -1,19 +1,18 @@
 package com.example.demo.protocol.core;
 
+import com.example.demo.protocol.annotation.Payload;
 import org.pcap4j.packet.AbstractPacket;
 import org.pcap4j.packet.Packet;
 
 import java.lang.reflect.Field;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.nio.charset.Charset;
 import java.util.*;
 
 public final class ProtocolCodec<T> {
 
     private final Class<T> clazz;
-    private final List<FieldInfo> fixedFields;
-    private final FieldInfo payloadField;
-    private final int headerSize;
+    private final List<FieldInfo> fixedFields; // 按 order 排序
+    private final FieldInfo payloadField;      // @Payload 字段(向后兼容)
 
     public ProtocolCodec(Class<T> clazz) {
         this.clazz = clazz;
@@ -21,52 +20,45 @@ public final class ProtocolCodec<T> {
         FieldInfo payload = null;
 
         for (Field f : clazz.getDeclaredFields()) {
-            if (f.isAnnotationPresent(com.example.demo.protocol.annotation.Payload.class)) {
-                payload = new FieldInfo(f, -1, -1, true);
+            if (f.isAnnotationPresent(Payload.class)) {
+                payload = new FieldInfo(f);
             } else if (f.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolField.class)) {
-                com.example.demo.protocol.annotation.ProtocolField ann = f.getAnnotation(com.example.demo.protocol.annotation.ProtocolField.class);
-                fixed.add(new FieldInfo(f, ann.order(), ann.size(), false));
+                fixed.add(new FieldInfo(f));
             }
         }
-
         fixed.sort(Comparator.comparingInt(f -> f.order));
-
-        if (fixed.stream().mapToInt(f -> f.size).sum() % 8 != 0) {
-            throw new IllegalArgumentException("Fixed field sizes must sum to a whole number of bytes in " + clazz.getName());
-        }
-
         this.fixedFields = fixed;
         this.payloadField = payload;
-        this.headerSize = fixed.stream().mapToInt(f -> f.size).sum() / 8;
-    }
-
-    public int headerSize() {
-        return headerSize;
     }
 
     public T deserialize(byte[] rawData) {
         return deserialize(rawData, 0, rawData.length);
     }
 
+    @SuppressWarnings("unchecked")
     public T deserialize(byte[] rawData, int offset, int length) {
         try {
             T obj = clazz.getDeclaredConstructor().newInstance();
-            int pos = offset;
+            FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
+            BitCursor cursor = new BitCursor(rawData, offset);
 
             for (FieldInfo fi : fixedFields) {
+                long size = resolveSize(fi, obj, ctx, true);
+                Object value = readValue(fi, cursor, (int) size, ctx);
                 fi.field.setAccessible(true);
-                int byteSize = fi.size / 8;
-                long val = readBytes(rawData, pos, byteSize);
-                fi.field.set(obj, convertToFieldType(fi.field.getType(), val, byteSize));
-                pos += byteSize;
+                fi.field.set(obj, value);
+                ctx.put(fi.name, value);
             }
 
-            if (payloadField != null && length > headerSize) {
-                payloadField.field.setAccessible(true);
-                byte[] payloadData = Arrays.copyOfRange(rawData, offset + headerSize, offset + length);
-                payloadField.field.set(obj, payloadData);
+            // 向后兼容:@Payload 取剩余字节
+            if (payloadField != null) {
+                int consumedBits = cursor.bitOffset();
+                int consumedBytes = (consumedBits + 7) / 8;
+                if (length > consumedBytes) {
+                    payloadField.field.setAccessible(true);
+                    payloadField.field.set(obj, Arrays.copyOfRange(rawData, offset + consumedBytes, offset + length));
+                }
             }
-
             return obj;
         } catch (Exception e) {
             throw new RuntimeException("Failed to deserialize " + clazz.getName(), e);
@@ -75,37 +67,195 @@ public final class ProtocolCodec<T> {
 
     public byte[] serialize(T obj) {
         try {
-            int totalSize = headerSize;
-            if (payloadField != null) {
-                payloadField.field.setAccessible(true);
-                byte[] payloadData = (byte[]) payloadField.field.get(obj);
-                totalSize += payloadData != null ? payloadData.length : 0;
-            }
-
-            ByteBuffer buf = ByteBuffer.allocate(totalSize).order(ByteOrder.BIG_ENDIAN);
-
+            FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
+            // 先把所有字段值装入 ctx(序列化时 ctx 一次性完整)
             for (FieldInfo fi : fixedFields) {
                 fi.field.setAccessible(true);
-                Object value = fi.field.get(obj);
-                int byteSize = fi.size / 8;
-                long val = convertFromFieldType(fi.field.getType(), value);
-                writeBytes(buf, val, byteSize);
+                ctx.put(fi.name, fi.field.get(obj));
             }
 
+            // 第一遍:算总位数
+            int totalBits = 0;
+            for (FieldInfo fi : fixedFields) {
+                long size = resolveSize(fi, obj, ctx, false);
+                if (size < 0) {
+                    throw new IllegalStateException("cannot resolve size of field " + fi.name);
+                }
+                totalBits += size;
+            }
+            byte[] payloadData = null;
             if (payloadField != null) {
                 payloadField.field.setAccessible(true);
-                byte[] payloadData = (byte[]) payloadField.field.get(obj);
+                payloadData = (byte[]) payloadField.field.get(obj);
                 if (payloadData != null) {
-                    buf.put(payloadData);
+                    totalBits += payloadData.length * 8;
                 }
             }
 
-            return buf.array();
+            BitCursor cursor = new BitCursor((totalBits + 7) / 8);
+            for (FieldInfo fi : fixedFields) {
+                long size = resolveSize(fi, obj, ctx, false);
+                writeValue(fi, obj, cursor, (int) size, ctx);
+            }
+            if (payloadField != null && payloadData != null) {
+                cursor.writeBytes(payloadData);
+            }
+            return cursor.bytes();
         } catch (Exception e) {
             throw new RuntimeException("Failed to serialize " + clazz.getName(), e);
         }
     }
 
+    // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf) ----
+    private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize) throws Exception {
+        // 1. 钩子优先
+        if (obj instanceof DynamicSize ds) {
+            long s = ds.computeSize(fi.name, ctx);
+            if (s >= 0) {
+                return s;
+            }
+        }
+        // 2. 声明式 lengthField(Task 6 启用)
+        if (!fi.lengthField.isEmpty() && ctx.hasRead(fi.lengthField)) {
+            int ref = ctx.getInt(fi.lengthField);
+            return fi.lengthUnit == LengthUnit.BYTES ? ref * 8L : ref;
+        }
+        // 3. NESTED:按嵌套实体自身固定字段位数计算(取整到整字节)
+        //    BitCursor 的 readBytes/writeBytes 要求整字节 & 字节对齐,故 NESTED 按
+        //    「嵌套实体 serialize 后的字节长度 * 8」计位。Phase 1 仅支持嵌套实体本身
+        //    全为固定 size 字段的情形(任一嵌套字段无确定 size → 抛异常,留待后续)。
+        if (effectiveType(fi) == FieldType.NESTED) {
+            long raw = fixedBitSize(fi.field.getType());
+            return ((raw + 7) / 8) * 8;
+        }
+        // 4. 固定 size
+        if (fi.size > 0) {
+            return fi.size;
+        }
+        throw new IllegalStateException("cannot resolve size of field " + fi.name);
+    }
+
+    /**
+     * 计算某实体类型「全固定字段」的位总和(供 NESTED 定长解析)。
+     * 任一 {@code @ProtocolField} 字段无确定 size(≤0)即抛异常——这意味着
+     * NESTED-in-middle 且变长的情形在 Phase 1 不支持(可接受)。
+     */
+    private static long fixedBitSize(Class<?> type) {
+        long sum = 0;
+        for (Field f : type.getDeclaredFields()) {
+            if (f.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolField.class)) {
+                com.example.demo.protocol.annotation.ProtocolField ann =
+                        f.getAnnotation(com.example.demo.protocol.annotation.ProtocolField.class);
+                if (ann.size() <= 0) {
+                    throw new IllegalStateException(
+                            "cannot resolve fixed size of nested field " + f.getName()
+                                    + " in " + type.getName()
+                                    + ": dynamic nested length unsupported in Phase 1");
+                }
+                sum += ann.size();
+            }
+        }
+        return sum;
+    }
+
+    private Object readValue(FieldInfo fi, BitCursor cursor, int size, FieldContext ctx) throws Exception {
+        FieldType type = effectiveType(fi);
+        return switch (type) {
+            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED);
+            case BYTES -> cursor.readBytes(size);
+            case STRING -> new String(cursor.readBytes(size), Charset.forName(fi.charset));
+            case NESTED -> {
+                ProtocolCodec<?> nested = codecFor(fi.field.getType());
+                byte[] seg = cursor.readBytes(size);
+                yield nested.deserialize(seg, 0, seg.length);
+            }
+        };
+    }
+
+    private void writeValue(FieldInfo fi, Object obj, BitCursor cursor, int size, FieldContext ctx) throws Exception {
+        FieldType type = effectiveType(fi);
+        fi.field.setAccessible(true);
+        Object value = fi.field.get(obj);
+        switch (type) {
+            case INT, UNSIGNED -> {
+                long v = convertFromFieldType(value);
+                cursor.writeBits(v, size);
+            }
+            case BYTES -> cursor.writeBytes((byte[]) value);
+            case STRING -> cursor.writeBytes(((String) value).getBytes(Charset.forName(fi.charset)));
+            case NESTED -> {
+                ProtocolCodec<?> nested = codecFor(fi.field.getType());
+                cursor.writeBytes(serializeNested(nested, value));
+            }
+        }
+    }
+
+    private FieldType effectiveType(FieldInfo fi) {
+        if (fi.type != FieldType.INT) {
+            return fi.type; // 显式指定
+        }
+        // INT 默认:按 Java 类型推断(BYTES/STRING/NESTED)
+        Class<?> t = fi.field.getType();
+        if (t == byte[].class) {
+            return FieldType.BYTES;
+        }
+        if (t == String.class) {
+            return FieldType.STRING;
+        }
+        // 字段类型本身是 @ProtocolPacket 实体 → 当作 NESTED(也可显式 type=NESTED)
+        if (!t.isPrimitive() && !Number.class.isAssignableFrom(t)
+                && t.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
+            return FieldType.NESTED;
+        }
+        return FieldType.INT;
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static final Map<Class<?>, ProtocolCodec> NESTED_CACHE = new HashMap<>();
+
+    @SuppressWarnings("unchecked")
+    private ProtocolCodec<?> codecFor(Class<?> type) {
+        ProtocolCodec<?> cached = NESTED_CACHE.get(type);
+        if (cached != null) {
+            return cached;
+        }
+        ProtocolCodec<?> c = new ProtocolCodec<>(type);
+        NESTED_CACHE.put(type, c);
+        return c;
+    }
+
+    /**
+     * 序列化嵌套实体。{@code ProtocolCodec<?>} 的 T 是通配符捕获,无法直接接受 Object,
+     * 故以 raw 类型绕过泛型(嵌套实体的类型已由字段声明保证一致)。
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static byte[] serializeNested(ProtocolCodec<?> codec, Object value) {
+        return ((ProtocolCodec) codec).serialize(value);
+    }
+
+    private static Object convertToFieldType(Class<?> type, long val, boolean unsigned) {
+        if (unsigned) {
+            if (type == int.class || type == Integer.class) return (int) val;
+            if (type == long.class || type == Long.class) return val;
+        }
+        if (type == byte.class || type == Byte.class) return (byte) val;
+        if (type == short.class || type == Short.class) return (short) val;
+        if (type == int.class || type == Integer.class) return (int) val;
+        if (type == long.class || type == Long.class) return val;
+        return val;
+    }
+
+    private static long convertFromFieldType(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        return 0;
+    }
+
+    // ---- pcap4j 适配(保留旧接口) ----
     public Packet toPacket(byte[] rawData, int offset, int length) {
         org.pcap4j.util.ByteArrays.validateBounds(rawData, offset, length);
         T obj = deserialize(rawData, offset, length);
@@ -118,87 +268,54 @@ public final class ProtocolCodec<T> {
     }
 
     public T fromPacket(Packet packet) {
-        byte[] rawData = packet.getRawData();
-        return deserialize(rawData);
+        return deserialize(packet.getRawData());
     }
 
-    private static long readBytes(byte[] data, int offset, int size) {
-        long val = 0;
-        for (int i = 0; i < size; i++) {
-            val = (val << 8) | (data[offset + i] & 0xFF);
+    // ---- 内部结构 ----
+    private static final class FieldInfo {
+        final Field field;
+        final String name;
+        final int order;
+        final int size;
+        final FieldType type;
+        final String lengthField;
+        final LengthUnit lengthUnit;
+        final String presentIf;
+        final String charset;
+
+        FieldInfo(Field f) {
+            this.field = f;
+            this.name = f.getName();
+            com.example.demo.protocol.annotation.ProtocolField ann = f.getAnnotation(com.example.demo.protocol.annotation.ProtocolField.class);
+            this.order = ann.order();
+            this.size = ann.size();
+            this.type = ann.type();
+            this.lengthField = ann.lengthField();
+            this.lengthUnit = ann.lengthUnit();
+            this.presentIf = ann.presentIf();
+            this.charset = ann.charset();
         }
-        return val;
     }
-
-    private static void writeBytes(ByteBuffer buf, long val, int size) {
-        for (int i = size - 1; i >= 0; i--) {
-            buf.put((byte) ((val >> (i * 8)) & 0xFF));
-        }
-    }
-
-    private static Object convertToFieldType(Class<?> type, long val, int byteSize) {
-        if (type == byte.class || type == Byte.class) return (byte) val;
-        if (type == short.class || type == Short.class) return (short) val;
-        if (type == int.class || type == Integer.class) return (int) val;
-        if (type == long.class || type == Long.class) return val;
-        return val;
-    }
-
-    private static long convertFromFieldType(Class<?> type, Object value) {
-        if (value == null) return 0;
-        if (value instanceof Number n) return n.longValue();
-        return 0;
-    }
-
-    private record FieldInfo(Field field, int order, int size, boolean isPayload) {}
 
     private final class AutoPacket extends AbstractPacket {
-
         private static final long serialVersionUID = 1L;
-
         private final byte[] rawData;
         private final AutoHeader autoHeader;
-        private final Packet payload;
 
         AutoPacket(byte[] rawData, int offset, int length, T obj) {
             this.rawData = Arrays.copyOfRange(rawData, offset, offset + length);
             this.autoHeader = new AutoHeader(this.rawData, obj);
-            this.payload = null;
         }
 
-        @Override
-        public AutoHeader getHeader() {
-            return autoHeader;
-        }
-
-        @Override
-        public Packet getPayload() {
-            return payload;
-        }
-
-        @Override
-        public AutoBuilder getBuilder() {
-            return new AutoBuilder();
-        }
-
-        @Override
-        public int length() {
-            return rawData.length;
-        }
-
-        @Override
-        public String toString() {
-            return "[AutoPacket " + clazz.getSimpleName() + " " + autoHeader + "]";
-        }
-
-        @Override
-        public byte[] getRawData() {
-            return rawData.clone();
-        }
+        @Override public AutoHeader getHeader() { return autoHeader; }
+        @Override public Packet getPayload() { return null; }
+        @Override public AutoBuilder getBuilder() { return new AutoBuilder(); }
+        @Override public int length() { return rawData.length; }
+        @Override public String toString() { return "[AutoPacket " + clazz.getSimpleName() + "]"; }
+        @Override public byte[] getRawData() { return rawData.clone(); }
     }
 
     private final class AutoHeader extends AbstractPacket.AbstractHeader {
-
         private static final long serialVersionUID = 1L;
         private final byte[] rawData;
         private final T obj;
@@ -208,41 +325,16 @@ public final class ProtocolCodec<T> {
             this.obj = obj;
         }
 
-        @Override
-        public int length() {
-            return rawData.length;
+        @Override public int length() { return rawData.length; }
+        @Override public byte[] getRawData() { return rawData.clone(); }
+        @Override public List<byte[]> getRawFields() {
+            // AutoHeader 不细分子字段,整体作为单一原始字段返回。
+            return Collections.singletonList(rawData.clone());
         }
-
-        @Override
-        public byte[] getRawData() {
-            return rawData.clone();
-        }
-
-        @Override
-        public List<byte[]> getRawFields() {
-            List<byte[]> fields = new ArrayList<>();
-            int pos = 0;
-            for (FieldInfo fi : fixedFields) {
-                int byteSize = fi.size / 8;
-                byte[] fieldBytes = new byte[byteSize];
-                System.arraycopy(rawData, pos, fieldBytes, 0, byteSize);
-                fields.add(fieldBytes);
-                pos += byteSize;
-            }
-            if (payloadField != null && rawData.length > headerSize) {
-                fields.add(Arrays.copyOfRange(rawData, headerSize, rawData.length));
-            }
-            return fields;
-        }
-
-        @Override
-        public String toString() {
-            return obj != null ? obj.toString() : Arrays.toString(rawData);
-        }
+        @Override public String toString() { return obj != null ? obj.toString() : Arrays.toString(rawData); }
     }
 
     public final class AutoBuilder extends AbstractPacket.AbstractBuilder {
-
         private T obj;
 
         AutoBuilder() {
@@ -258,8 +350,7 @@ public final class ProtocolCodec<T> {
             return this;
         }
 
-        @Override
-        public AutoPacket build() {
+        @Override public AutoPacket build() {
             byte[] data = serialize(obj);
             return new AutoPacket(data, 0, data.length, obj);
         }

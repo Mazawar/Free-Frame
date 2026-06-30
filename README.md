@@ -105,8 +105,28 @@ public class DnsQuestion {
 @ProtocolField(type=BYTES, sentinel=0x00) private byte[] text;
 ```
 
+### Phase 2d(本版本新增)
+
+- **枚举语义** —— 字段类型用 `ProtocolEnum`(实现该接口的 enum),配 `enumClass` 指定具体枚举:协议里的语义数字(IP protocol 17=UDP)自动映射,可读、类型安全。未知值不中断,存原始数字(`UnknownEnumValue`),序列化零丢失。
+
+示例:
+
+```java
+public enum IpProtocol implements ProtocolEnum {
+    ICMP(1), TCP(6), UDP(17);
+    private final int v;
+    IpProtocol(int v) { this.v = v; }
+    public int value() { return v; }
+}
+
+// 字段声明为 ProtocolEnum 接口类型 + enumClass 指定具体枚举
+@ProtocolField(order=9, size=8, enumClass=IpProtocol.class)
+private ProtocolEnum protocol;   // 读到 17 → IpProtocol.UDP;读到 89(未知)→ UnknownEnumValue(89)
+```
+
 ### 仍未覆盖(后续 Phase)
 
+- 位标志(`Set<Flag>` 语义,SYN+ACK 组合)
 - 元素内字段级 sentinel(如 DNS 的「label 长度=0 表示结束」)
 - 异质 TLV(type → 子结构分派,如 TCP/DHCP Options)
 - 复杂条件(位掩码 / `&&`)
@@ -119,7 +139,9 @@ public class DnsQuestion {
   - Phase 1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase1-design.md`
   - Phase 2a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2a-design.md`
   - Phase 2b:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2b-design.md`
+  - Phase 2d:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2d-design.md`
 - 实施计划:
   - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
   - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`
   - Phase 2b:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2b.md`
+  - Phase 2d:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2d.md`

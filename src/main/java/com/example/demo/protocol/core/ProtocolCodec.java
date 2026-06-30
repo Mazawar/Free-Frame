@@ -223,6 +223,10 @@ public final class ProtocolCodec<T> {
 
     // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf;Task 10 扩充动态 NESTED) ----
     private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize, int remainingBits) throws Exception {
+        // -1. sentinel:数据位数 + 8(标记字节)
+        if (fi.sentinel >= 0) {
+            return sentinelTotalBits(fi, obj);
+        }
         // 0. LIST:总位数 = 各元素 serialize 后累加
         if (effectiveType(fi) == FieldType.LIST) {
             return listTotalBits(fi, obj);
@@ -300,6 +304,30 @@ public final class ProtocolCodec<T> {
     }
 
     /**
+     * 计算 sentinel 字段总位数(供 resolveSize 序列化用):数据位数 + 8(标记字节)。
+     * - BYTES:数据 = 字段当前字节数
+     * - LIST:数据 = 各元素 serialize 累加
+     */
+    private long sentinelTotalBits(FieldInfo fi, Object obj) throws Exception {
+        fi.field.setAccessible(true);
+        Object value = fi.field.get(obj);
+        long dataBits;
+        if (value instanceof byte[] bytes) {
+            dataBits = bytes.length * 8L;
+        } else if (value instanceof java.util.List<?> list) {
+            ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+            long total = 0;
+            for (Object elem : list) {
+                total += serializeNested(elementCodec, elem).length * 8L;
+            }
+            dataBits = total;
+        } else {
+            throw new IllegalStateException("sentinel field " + fi.name + " must be byte[] or List");
+        }
+        return dataBits + 8;  // + 标记字节
+    }
+
+    /**
      * 计算某实体类型「全固定字段」的位总和(供 NESTED 定长解析)。
      * 任一 {@code @ProtocolField} 字段无确定 size(≤0)即抛异常——这意味着
      * NESTED-in-middle 且变长的情形在 Phase 1 不支持(可接受)。
@@ -323,6 +351,10 @@ public final class ProtocolCodec<T> {
     }
 
     private Object readValue(FieldInfo fi, BitCursor cursor, int size, FieldContext ctx) throws Exception {
+        // sentinel 反序列化(跨 BYTES/LIST,优先)
+        if (fi.sentinel >= 0) {
+            return readSentinelValue(fi, cursor);
+        }
         FieldType type = effectiveType(fi);
         return switch (type) {
             case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED);
@@ -350,7 +382,56 @@ public final class ProtocolCodec<T> {
         };
     }
 
+    /**
+     * sentinel 反序列化:读到标记字节停。
+     * - BYTES:逐字节读到 == sentinel,消费标记,返回之前的字节
+     * - LIST:peek → 命中 sentinel 则消费标记+停;否则读一个元素,循环
+     */
+    private Object readSentinelValue(FieldInfo fi, BitCursor cursor) throws Exception {
+        if (effectiveType(fi) == FieldType.LIST) {
+            ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+            java.util.List<Object> list = new java.util.ArrayList<>();
+            while (true) {
+                int peek = cursor.peekByte();
+                if (peek == fi.sentinel) {
+                    cursor.skipBits(8);  // 消费标记字节
+                    break;
+                }
+                if (peek < 0) {
+                    throw new IllegalStateException(
+                            "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
+                }
+                byte[] rest = cursor.remainingFromCursor();
+                Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                list.add(elem);
+                cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+            }
+            return list;
+        } else {
+            // BYTES:逐字节读
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            while (true) {
+                int peek = cursor.peekByte();
+                if (peek == fi.sentinel) {
+                    cursor.skipBits(8);  // 消费标记
+                    break;
+                }
+                if (peek < 0) {
+                    throw new IllegalStateException(
+                            "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
+                }
+                bos.write((int) cursor.readBits(8));  // 读一字节(取低8位)
+            }
+            return bos.toByteArray();
+        }
+    }
+
     private void writeValue(FieldInfo fi, Object obj, BitCursor cursor, int size, FieldContext ctx) throws Exception {
+        // sentinel 序列化:写数据 + 追加标记字节
+        if (fi.sentinel >= 0) {
+            writeSentinelValue(fi, obj, cursor);
+            return;
+        }
         FieldType type = effectiveType(fi);
         fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
@@ -380,6 +461,23 @@ public final class ProtocolCodec<T> {
                 }
             }
         }
+    }
+
+    /** sentinel 序列化:写数据 + 追加标记字节。 */
+    private void writeSentinelValue(FieldInfo fi, Object obj, BitCursor cursor) throws Exception {
+        fi.field.setAccessible(true);
+        Object value = fi.field.get(obj);
+        if (value instanceof byte[] bytes) {
+            cursor.writeBytes(bytes);
+        } else if (value instanceof java.util.List<?> list) {
+            ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+            for (Object elem : list) {
+                cursor.writeBytes(serializeNested(elementCodec, elem));
+            }
+        } else {
+            throw new IllegalStateException("sentinel field " + fi.name + " must be byte[] or List");
+        }
+        cursor.writeBits(fi.sentinel, 8);  // 追加标记字节
     }
 
     private FieldType effectiveType(FieldInfo fi) {

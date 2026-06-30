@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCAP 数据包抓取工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .container { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+        h1 { font-size: 24px; font-weight: 600; margin-bottom: 24px; color: #f1f5f9; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+        .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #94a3b8; }
+        .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+        .form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 200px; }
+        .form-group label { font-size: 13px; color: #94a3b8; }
+        select, input { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+        select:focus, input:focus { border-color: #3b82f6; }
+        button { padding: 8px 20px; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: opacity 0.15s; }
+        button:hover { opacity: 0.85; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-danger { background: #ef4444; color: #fff; }
+        .btn-secondary { background: #475569; color: #e2e8f0; }
+        .status-bar { display: flex; gap: 24px; align-items: center; }
+        .status-indicator { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; }
+        .dot.idle { background: #64748b; }
+        .dot.capturing { background: #22c55e; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .packet-count { font-size: 14px; color: #94a3b8; }
+        .packet-list { max-height: 480px; overflow-y: auto; margin-top: 12px; }
+        .packet-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #cbd5e1; }
+        .packet-item:hover { border-color: #3b82f6; }
+        .packet-index { color: #3b82f6; font-weight: 600; }
+        .empty { color: #64748b; font-size: 14px; text-align: center; padding: 40px 0; }
+        .error-msg { color: #f87171; font-size: 13px; margin-top: 8px; }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; }
+        .refresh-interval { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #94a3b8; }
+        .refresh-interval input { width: 60px; padding: 4px 8px; font-size: 13px; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PCAP 数据包抓取工具</h1>
+
+    <div class="card">
+        <h2>网络接口</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label>选择接口</label>
+                <select id="interfaceSelect"><option value="">加载中...</option></select>
+            </div>
+            <div class="form-group" style="max-width: 120px;">
+                <label>最大包数</label>
+                <input type="number" id="maxPackets" value="100" min="1" max="10000">
+            </div>
+        </div>
+        <div class="error-msg" id="loadError"></div>
+    </div>
+
+    <div class="card">
+        <h2>控制面板</h2>
+        <div class="form-row">
+            <button class="btn-primary" id="btnStart" onclick="startCapture()">开始抓包</button>
+            <button class="btn-danger" id="btnStop" onclick="stopCapture()" disabled>停止抓包</button>
+            <button class="btn-secondary" id="btnClear" onclick="clearPackets()">清空列表</button>
+        </div>
+        <div class="error-msg" id="actionError"></div>
+    </div>
+
+    <div class="card">
+        <h2>抓包状态</h2>
+        <div class="status-bar">
+            <div class="status-indicator">
+                <span class="dot idle" id="statusDot"></span>
+                <span id="statusText">空闲</span>
+            </div>
+            <span class="packet-count" id="packetCount">已捕获: 0 个数据包</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="toolbar">
+            <h2>数据包列表</h2>
+            <div class="refresh-interval">
+                <label>自动刷新 (秒):</label>
+                <input type="number" id="refreshInterval" value="1" min="0" max="10" onchange="updateRefresh()">
+            </div>
+        </div>
+        <div class="packet-list" id="packetList">
+            <div class="empty">暂无捕获数据</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let refreshTimer = null;
+    let lastCount = 0;
+
+    async function loadInterfaces() {
+        const sel = document.getElementById('interfaceSelect');
+        const err = document.getElementById('loadError');
+        try {
+            const res = await fetch('/api/pcap/interfaces');
+            const data = await res.json();
+            if (data.error) { err.textContent = data.error; return; }
+            sel.innerHTML = '';
+            if (!data.interfaces || data.interfaces.length === 0) {
+                sel.innerHTML = '<option value="">未找到网络接口</option>';
+                return;
+            }
+            data.interfaces.forEach(iface => {
+                const opt = document.createElement('option');
+                opt.value = iface.name;
+                opt.textContent = iface.description || iface.name;
+                sel.appendChild(opt);
+            });
+        } catch (e) {
+            err.textContent = '无法加载接口: ' + e.message;
+        }
+    }
+
+    async function startCapture() {
+        const iface = document.getElementById('interfaceSelect').value;
+        const max = document.getElementById('maxPackets').value;
+        const err = document.getElementById('actionError');
+        err.textContent = '';
+        if (!iface) { err.textContent = '请先选择网络接口'; return; }
+        try {
+            const res = await fetch('/api/pcap/capture/start?interfaceName=' + encodeURIComponent(iface) + '&maxPackets=' + max, { method: 'POST' });
+            const data = await res.json();
+            if (data.error) { err.textContent = data.error; return; }
+            setCapturing(true);
+            lastCount = 0;
+        } catch (e) {
+            err.textContent = '请求失败: ' + e.message;
+        }
+    }
+
+    async function stopCapture() {
+        const err = document.getElementById('actionError');
+        err.textContent = '';
+        try {
+            const res = await fetch('/api/pcap/capture/stop', { method: 'POST' });
+            const data = await res.json();
+            if (data.error) { err.textContent = data.error; return; }
+            setCapturing(false);
+            refreshPackets();
+        } catch (e) {
+            err.textContent = '请求失败: ' + e.message;
+        }
+    }
+
+    function clearPackets() {
+        document.getElementById('packetList').innerHTML = '<div class="empty">暂无捕获数据</div>';
+        lastCount = 0;
+    }
+
+    function setCapturing(active) {
+        document.getElementById('btnStart').disabled = active;
+        document.getElementById('btnStop').disabled = !active;
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        dot.className = active ? 'dot capturing' : 'dot idle';
+        text.textContent = active ? '抓包中...' : '空闲';
+    }
+
+    async function refreshStatus() {
+        try {
+            const res = await fetch('/api/pcap/capture/status');
+            const data = await res.json();
+            document.getElementById('packetCount').textContent = '已捕获: ' + data.packetCount + ' 个数据包';
+            setCapturing(data.capturing);
+            if (data.packetCount !== lastCount) {
+                lastCount = data.packetCount;
+                refreshPackets();
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    async function refreshPackets() {
+        try {
+            const res = await fetch('/api/pcap/capture/packets');
+            const data = await res.json();
+            const list = document.getElementById('packetList');
+            const packets = data.packets || [];
+            if (packets.length === 0) {
+                list.innerHTML = '<div class="empty">暂无捕获数据</div>';
+                return;
+            }
+            let html = '';
+            packets.forEach((p, i) => {
+                html += '<div class="packet-item"><span class="packet-index">[#' + (i + 1) + ']</span> ' + escapeHtml(p) + '</div>';
+            });
+            list.innerHTML = html;
+            list.scrollTop = list.scrollHeight;
+        } catch (_) { /* ignore */ }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function updateRefresh() {
+        const sec = parseInt(document.getElementById('refreshInterval').value) || 0;
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+        if (sec > 0) {
+            refreshTimer = setInterval(refreshStatus, sec * 1000);
+        }
+    }
+
+    loadInterfaces();
+    updateRefresh();
+</script>
+</body>
+</html>

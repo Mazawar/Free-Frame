@@ -207,19 +207,57 @@ public final class ProtocolCodec<T> {
             }
 
             BitCursor cursor = new BitCursor((totalBits + 7) / 8);
+            // 记录校验和字段的偏移(field → 起始字节偏移),供第三步回写
+            java.util.Map<String, Integer> checksumOffsets = new java.util.HashMap<>();
             for (FieldInfo fi : fixedFields) {
                 if (!evalPresentIf(fi.presentIf, ctx)) {
                     continue;
                 }
                 long size = resolveSize(fi, obj, ctx, false, 0);
-                writeValue(fi, obj, cursor, (int) size, ctx);
+                if (fi.checksumField) {
+                    // 校验和字段:记录起始字节偏移,强制写 0
+                    int startByte = cursor.bitOffset() / 8;
+                    checksumOffsets.put(fi.name, startByte);
+                    cursor.writeBits(0L, (int) size);
+                } else {
+                    writeValue(fi, obj, cursor, (int) size, ctx);
+                }
             }
             if (payloadField != null && payloadData != null) {
                 cursor.writeBytes(payloadData);
             }
+            // 第三步:若实体实现 Checksum,对每个校验和字段 compute → 回写
+            if (obj instanceof Checksum cs) {
+                byte[] bytes = cursor.bytes();
+                for (FieldInfo fi : fixedFields) {
+                    if (!fi.checksumField) continue;
+                    long computed = cs.compute(fi.name, bytes);
+                    if (computed < 0) continue;  // 钩子不接管
+                    int size = (int) resolveSize(fi, obj, ctx, false, 0);
+                    int truncated = (int) (computed & (size >= 64 ? -1L : ((1L << size) - 1)));
+                    int startByte = checksumOffsets.get(fi.name);
+                    writeBitsAtOffset(bytes, startByte, size, truncated);
+                }
+                return bytes;
+            }
             return cursor.bytes();
         } catch (Exception e) {
             throw new RuntimeException("Failed to serialize " + clazz.getName() + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** 把 value 的低 size 位写进 bytes 从 startByte 字节起的 MSB 优先位置(供校验和回写)。 */
+    private static void writeBitsAtOffset(byte[] bytes, int startByte, int size, long value) {
+        for (int i = 0; i < size; i++) {
+            int absBit = startByte * 8 + i;
+            int byteIdx = absBit / 8;
+            int bitInByte = 7 - (absBit % 8);
+            long bit = (value >> (size - 1 - i)) & 1L;
+            if (bit == 1) {
+                bytes[byteIdx] |= (byte) (1 << bitInByte);
+            } else {
+                bytes[byteIdx] &= (byte) ~(1 << bitInByte);
+            }
         }
     }
 
@@ -744,6 +782,7 @@ public final class ProtocolCodec<T> {
         final String[] dispatch;
         final java.util.Map<Integer,String> dispatchMap;
         final java.util.Map<String,Integer> reverseDispatchMap;
+        final boolean checksumField;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -782,6 +821,7 @@ public final class ProtocolCodec<T> {
             }
             this.dispatchMap = fwd;
             this.reverseDispatchMap = rev;
+            this.checksumField = f.isAnnotationPresent(com.example.demo.protocol.annotation.ChecksumField.class);
             // 校验:dispatch 类必须存在且是 @ProtocolPacket 实体
             Class<?> ctx = f.getDeclaringClass();
             for (String cn : fwd.values()) {
@@ -818,6 +858,7 @@ public final class ProtocolCodec<T> {
             this.dispatch = new String[0];
             this.dispatchMap = java.util.Collections.emptyMap();
             this.reverseDispatchMap = java.util.Collections.emptyMap();
+            this.checksumField = false;
         }
     }
 

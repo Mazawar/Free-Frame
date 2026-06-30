@@ -21,7 +21,7 @@ public final class ProtocolCodec<T> {
 
         for (Field f : clazz.getDeclaredFields()) {
             if (f.isAnnotationPresent(Payload.class)) {
-                payload = new FieldInfo(f);
+                payload = FieldInfo.forPayload(f);
             } else if (f.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolField.class)) {
                 fixed.add(new FieldInfo(f));
             }
@@ -342,6 +342,7 @@ public final class ProtocolCodec<T> {
         final String presentIf;
         final String charset;
 
+        /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
             this.field = f;
             this.name = f.getName();
@@ -353,6 +354,23 @@ public final class ProtocolCodec<T> {
             this.lengthUnit = ann.lengthUnit();
             this.presentIf = ann.presentIf();
             this.charset = ann.charset();
+        }
+
+        /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
+        static FieldInfo forPayload(Field f) {
+            return new FieldInfo(f, f.getName());
+        }
+
+        private FieldInfo(Field f, String name) {
+            this.field = f;
+            this.name = name;
+            this.order = -1;
+            this.size = -1;
+            this.type = FieldType.BYTES;
+            this.lengthField = "";
+            this.lengthUnit = LengthUnit.BYTES;
+            this.presentIf = "";
+            this.charset = "UTF-8";
         }
     }
 

@@ -21,6 +21,9 @@ public class PcapService {
     private Thread captureThread;
     private final List<String> capturedPackets = new ArrayList<>();
 
+    private static final com.example.demo.protocol.core.ProtocolCodec<com.example.demo.protocol.Ipv4Header> IPV4_CODEC =
+            new com.example.demo.protocol.core.ProtocolCodec<>(com.example.demo.protocol.Ipv4Header.class);
+
     public List<PcapNetworkInterface> listNetworkInterfaces() throws Exception {
         return Pcaps.findAllDevs();
     }
@@ -104,6 +107,24 @@ public class PcapService {
     }
 
     private String parsePacket(Packet packet) {
+        // 新增:IPv4 解析分支(只读,用我们的 Ipv4Header codec;失败则回退原流程)
+        if (packet.contains(org.pcap4j.packet.IpV4Packet.class)) {
+            try {
+                org.pcap4j.packet.IpV4Packet ip = packet.get(org.pcap4j.packet.IpV4Packet.class);
+                byte[] headerBytes = ip.getHeader().getRawData();
+                com.example.demo.protocol.Ipv4Header parsed = IPV4_CODEC.deserialize(headerBytes);
+                return "[IPv4] v=" + parsed.getVersion()
+                        + " ihl=" + parsed.getIhl()
+                        + " tos=" + parsed.getTos()
+                        + " ttl=" + parsed.getTtl()
+                        + " proto=" + parsed.getProtocol()
+                        + " src=" + formatIp(parsed.getSourceIp())
+                        + " dst=" + formatIp(parsed.getDestinationIp());
+            } catch (Exception e) {
+                log.debug("IPv4 parse via our codec failed, fallback to default", e);
+            }
+        }
+
         if (packet.contains(UdpPacket.class)) {
             UdpPacket udp = packet.get(UdpPacket.class);
             int dstPort = udp.getHeader().getDstPort().valueAsInt();
@@ -118,6 +139,10 @@ public class PcapService {
             }
         }
         return packet.toString();
+    }
+
+    private static String formatIp(int ip) {
+        return ((ip >> 24) & 0xFF) + "." + ((ip >> 16) & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + (ip & 0xFF);
     }
 
     private String tryParseCustom(byte[] rawData, int port) {

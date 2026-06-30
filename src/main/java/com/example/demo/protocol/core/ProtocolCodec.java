@@ -27,8 +27,41 @@ public final class ProtocolCodec<T> {
             }
         }
         fixed.sort(Comparator.comparingInt(f -> f.order));
+        validateReferences(fixed);
         this.fixedFields = fixed;
         this.payloadField = payload;
+    }
+
+    /** 注册期校验:lengthField 引用的字段必须存在,且 order 必须更小(禁止前向引用)。 */
+    private static void validateReferences(List<FieldInfo> sortedFields) {
+        Map<String, Integer> nameToOrder = new HashMap<>();
+        for (FieldInfo fi : sortedFields) {
+            nameToOrder.put(fi.name, fi.order);
+        }
+        for (FieldInfo fi : sortedFields) {
+            // lengthField 校验
+            if (!fi.lengthField.isEmpty()) {
+                Integer refOrder = nameToOrder.get(fi.lengthField);
+                if (refOrder == null) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "' lengthField references unknown field '" + fi.lengthField + "'");
+                }
+                if (refOrder >= fi.order) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "' lengthField references '" + fi.lengthField
+                                    + "' which is not earlier in order (forward ref forbidden)");
+                }
+            }
+            // presentIf 校验(只查字段存在)
+            if (!fi.presentIf.isBlank()) {
+                int eq = fi.presentIf.indexOf("==");
+                String left = eq >= 0 ? fi.presentIf.substring(0, eq).trim() : fi.presentIf.trim();
+                if (!nameToOrder.containsKey(left)) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "' presentIf references unknown field '" + left + "'");
+                }
+            }
+        }
     }
 
     public T deserialize(byte[] rawData) {

@@ -79,7 +79,11 @@ public final class ProtocolCodec<T> {
                 if (!evalPresentIf(fi.presentIf, ctx)) {
                     continue; // 条件不满足:不读字节、不入 ctx
                 }
-                long size = resolveSize(fi, obj, ctx, true);
+                // 反序列化路径:尚未读取嵌套对象值,无法序列化取尺寸。
+                // 对变长 NESTED 字段(最后一个字段)用「吃掉剩余字节」,
+                // 故把剩余位数传给 resolveSize(其余路径忽略此值)。
+                int remainingBits = length * 8 - cursor.bitOffset();
+                long size = resolveSize(fi, obj, ctx, true, remainingBits);
                 Object value = readValue(fi, cursor, (int) size, ctx);
                 fi.field.setAccessible(true);
                 fi.field.set(obj, value);
@@ -116,7 +120,7 @@ public final class ProtocolCodec<T> {
                 if (!evalPresentIf(fi.presentIf, ctx)) {
                     continue;
                 }
-                long size = resolveSize(fi, obj, ctx, false);
+                long size = resolveSize(fi, obj, ctx, false, 0);
                 if (size < 0) {
                     throw new IllegalStateException("cannot resolve size of field " + fi.name);
                 }
@@ -136,7 +140,7 @@ public final class ProtocolCodec<T> {
                 if (!evalPresentIf(fi.presentIf, ctx)) {
                     continue;
                 }
-                long size = resolveSize(fi, obj, ctx, false);
+                long size = resolveSize(fi, obj, ctx, false, 0);
                 writeValue(fi, obj, cursor, (int) size, ctx);
             }
             if (payloadField != null && payloadData != null) {
@@ -165,8 +169,8 @@ public final class ProtocolCodec<T> {
         return ctx.getInt(left) == expected;
     }
 
-    // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf) ----
-    private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize) throws Exception {
+    // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf;Task 10 扩充动态 NESTED) ----
+    private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize, int remainingBits) throws Exception {
         // 1. 钩子优先
         if (obj instanceof DynamicSize ds) {
             long s = ds.computeSize(fi.name, ctx);
@@ -179,13 +183,39 @@ public final class ProtocolCodec<T> {
             int ref = ctx.getInt(fi.lengthField);
             return fi.lengthUnit == LengthUnit.BYTES ? ref * 8L : ref;
         }
-        // 3. NESTED:按嵌套实体自身固定字段位数计算(取整到整字节)
-        //    BitCursor 的 readBytes/writeBytes 要求整字节 & 字节对齐,故 NESTED 按
-        //    「嵌套实体 serialize 后的字节长度 * 8」计位。Phase 1 仅支持嵌套实体本身
-        //    全为固定 size 字段的情形(任一嵌套字段无确定 size → 抛异常,留待后续)。
+        // 3. NESTED:嵌套实体的位长度(取整到整字节——readBytes/writeBytes 要求整字节 & 字节对齐)
         if (effectiveType(fi) == FieldType.NESTED) {
-            long raw = fixedBitSize(fi.field.getType());
-            return ((raw + 7) / 8) * 8;
+            // 3a. 嵌套实体本身全为固定 size 字段 → 直接按其字段 size 求和取整。
+            //     覆盖 Outer/BitFields 等全固定嵌套用例。
+            try {
+                long raw = fixedBitSize(fi.field.getType());
+                return ((raw + 7) / 8) * 8;
+            } catch (IllegalStateException dynamicNested) {
+                // 3b. 嵌套实体含变长字段(如 Ipv4Header.options,无 lengthField、size<=0)。
+                //     - 序列化路径:对象值在手,直接序列化取实际字节数(*8 取整到字节,本身已是整字节)。
+                //     - 反序列化路径:尚未读取对象值,无法序列化;此时「吃掉剩余字节」(变长 NESTED
+                //       只能作为帧中最后一个字段,Phase 1 限制)。remainingBits 为负(无剩余字节)说明该
+                //       字段并非最后一个 → 抛出,避免静默截断/破坏后续字段。
+                if (!deserialize) {
+                    fi.field.setAccessible(true);
+                    Object nestedValue = fi.field.get(obj);
+                    if (nestedValue == null) {
+                        throw new IllegalStateException(
+                                "cannot resolve size of dynamic NESTED field " + fi.name
+                                        + ": nested value is null during serialize");
+                    }
+                    byte[] nestedBytes = serializeNested(codecFor(fi.field.getType()), nestedValue);
+                    return nestedBytes.length * 8L;
+                }
+                if (remainingBits < 0) {
+                    throw new IllegalStateException(
+                            "cannot resolve size of dynamic NESTED field " + fi.name
+                                    + " in " + clazz.getName()
+                                    + ": mid-frame dynamic NESTED unsupported in Phase 1 "
+                                    + "(only the last field may consume remaining bytes)", dynamicNested);
+                }
+                return remainingBits;
+            }
         }
         // 4. 固定 size
         if (fi.size > 0) {

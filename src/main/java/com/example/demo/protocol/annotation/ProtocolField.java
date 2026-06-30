@@ -27,6 +27,9 @@ public @interface ProtocolField {
     /** lengthField 值的单位。 */
     LengthUnit lengthUnit() default LengthUnit.BYTES;
 
+    /** length 偏移:字段字节长度 = lengthField值 + lengthAdjust。默认 0(纯引用,Phase 1 行为不变)。 */
+    int lengthAdjust() default 0;
+
     /** 条件字段:"field==值" 满足才出现。 */
     String presentIf() default "";
 
@@ -38,4 +41,7 @@ public @interface ProtocolField {
 
     /** LIST 元素的实体类型(LIST 时必填)。 */
     Class<?> elementClass() default void.class;
+
+    /** sentinel 结束标记字节值(0x00–0xFF);-1 表示不用。读到该字节就结束。与 countField/lengthField 互斥。 */
+    int sentinel() default -1;
 }

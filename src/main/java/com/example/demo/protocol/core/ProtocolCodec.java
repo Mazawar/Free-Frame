@@ -376,7 +376,7 @@ public final class ProtocolCodec<T> {
         }
         FieldType type = effectiveType(fi);
         return switch (type) {
-            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED);
+            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED, fi.enumClass);
             case BYTES -> cursor.readBytes(size);
             case STRING -> new String(cursor.readBytes(size), Charset.forName(fi.charset));
             case NESTED -> {
@@ -545,10 +545,11 @@ public final class ProtocolCodec<T> {
         return ((ProtocolCodec) codec).serialize(value);
     }
 
-    private static Object convertToFieldType(Class<?> type, long val, boolean unsigned) {
-        // enum 字段:type 是 ProtocolEnum 的 enum
-        if (ProtocolEnum.class.isAssignableFrom(type) && Enum.class.isAssignableFrom(type)) {
-            return enumFromValue(type, (int) val);
+    private static Object convertToFieldType(Class<?> type, long val, boolean unsigned, Class<?> enumClass) {
+        // enum 字段:优先用注解的 enumClass,否则用字段 type(若它本身就是具体 enum)
+        Class<?> effectiveEnumType = (enumClass != null && enumClass != void.class) ? enumClass : type;
+        if (ProtocolEnum.class.isAssignableFrom(effectiveEnumType) && Enum.class.isAssignableFrom(effectiveEnumType)) {
+            return enumFromValue(effectiveEnumType, (int) val);
         }
         if (unsigned) {
             if (type == int.class || type == Integer.class) return (int) val;
@@ -619,6 +620,7 @@ public final class ProtocolCodec<T> {
         final Class<?> elementClass;
         final int lengthAdjust;
         final int sentinel;
+        final Class<?> enumClass;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -636,6 +638,7 @@ public final class ProtocolCodec<T> {
             this.elementClass = ann.elementClass();
             this.lengthAdjust = ann.lengthAdjust();
             this.sentinel = ann.sentinel();
+            this.enumClass = ann.enumClass();
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
@@ -657,6 +660,7 @@ public final class ProtocolCodec<T> {
             this.elementClass = void.class;
             this.lengthAdjust = 0;
             this.sentinel = -1;
+            this.enumClass = void.class;
         }
     }
 

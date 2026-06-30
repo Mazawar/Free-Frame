@@ -21,7 +21,8 @@ class EnumFieldTest {
     @Data
     @ProtocolPacket(port = 0)
     public static class ProtoPacket {
-        @ProtocolField(order = 1, size = 8) private IpProtocol protocol;
+        @ProtocolField(order = 1, size = 8, enumClass = IpProtocol.class)
+        private ProtocolEnum protocol;
     }
 
     @Test

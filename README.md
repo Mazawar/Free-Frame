@@ -90,9 +90,24 @@ public class DnsQuestion {
 }
 ```
 
+### Phase 2b(本版本新增)
+
+- **length 偏移** —— `lengthAdjust`:字段字节长度 = `lengthField值 + lengthAdjust`(解决 IP totalLen-20 这类)
+- **sentinel 结束标记** —— `sentinel=0xNN`:读到该字节就停。支持 BYTES(blob)和 LIST(重复实体),与 countField/lengthField 互斥
+
+示例:
+
+```java
+// IP payload:占 totalLen - 20 字节
+@ProtocolField(type=BYTES, lengthField="totalLen", lengthAdjust=-20) private byte[] payload;
+
+// C 字符串:读到 0x00 结束
+@ProtocolField(type=BYTES, sentinel=0x00) private byte[] text;
+```
+
 ### 仍未覆盖(后续 Phase)
 
-- length 驱动的数组 / 结束标记驱动(如真实 DNS 的 0x00、DHCP 的 0xFF)
+- 元素内字段级 sentinel(如 DNS 的「label 长度=0 表示结束」)
 - 异质 TLV(type → 子结构分派,如 TCP/DHCP Options)
 - 复杂条件(位掩码 / `&&`)
 - 校验和 / CRC 钩子(IPv4/TCP/UDP 校验和、伪首部)
@@ -103,6 +118,8 @@ public class DnsQuestion {
 - 设计 spec:
   - Phase 1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase1-design.md`
   - Phase 2a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2a-design.md`
+  - Phase 2b:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2b-design.md`
 - 实施计划:
   - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
   - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`
+  - Phase 2b:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2b.md`

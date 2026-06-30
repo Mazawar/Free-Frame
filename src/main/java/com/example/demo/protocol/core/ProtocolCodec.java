@@ -63,20 +63,24 @@ public final class ProtocolCodec<T> {
             }
             // LIST 校验
             if (fi.elementClass != void.class) {
-                if (fi.countField.isEmpty()) {
-                    throw new IllegalArgumentException(
-                            "LIST field '" + fi.name + "' missing countField");
+                // count 驱动校验:sentinel 驱动的 LIST 不需要 countField(二者互斥)
+                if (fi.sentinel < 0) {
+                    if (fi.countField.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "LIST field '" + fi.name + "' missing countField");
+                    }
+                    Integer refOrder = nameToOrder.get(fi.countField);
+                    if (refOrder == null) {
+                        throw new IllegalArgumentException(
+                                "LIST field '" + fi.name + "' countField references unknown field '" + fi.countField + "'");
+                    }
+                    if (refOrder >= fi.order) {
+                        throw new IllegalArgumentException(
+                                "LIST field '" + fi.name + "' countField references '" + fi.countField
+                                        + "' which is not earlier in order (forward ref forbidden)");
+                    }
                 }
-                Integer refOrder = nameToOrder.get(fi.countField);
-                if (refOrder == null) {
-                    throw new IllegalArgumentException(
-                            "LIST field '" + fi.name + "' countField references unknown field '" + fi.countField + "'");
-                }
-                if (refOrder >= fi.order) {
-                    throw new IllegalArgumentException(
-                            "LIST field '" + fi.name + "' countField references '" + fi.countField
-                                    + "' which is not earlier in order (forward ref forbidden)");
-                }
+                // elementClass + 边界校验:count 与 sentinel 驱动都适用
                 if (!fi.elementClass.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
                     throw new IllegalArgumentException(
                             "LIST field '" + fi.name + "' elementClass " + fi.elementClass.getName()

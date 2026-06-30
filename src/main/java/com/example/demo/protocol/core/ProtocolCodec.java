@@ -61,6 +61,58 @@ public final class ProtocolCodec<T> {
                             "field '" + fi.name + "' presentIf references unknown field '" + left + "'");
                 }
             }
+            // LIST 校验
+            if (fi.elementClass != void.class) {
+                if (fi.countField.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "LIST field '" + fi.name + "' missing countField");
+                }
+                Integer refOrder = nameToOrder.get(fi.countField);
+                if (refOrder == null) {
+                    throw new IllegalArgumentException(
+                            "LIST field '" + fi.name + "' countField references unknown field '" + fi.countField + "'");
+                }
+                if (refOrder >= fi.order) {
+                    throw new IllegalArgumentException(
+                            "LIST field '" + fi.name + "' countField references '" + fi.countField
+                                    + "' which is not earlier in order (forward ref forbidden)");
+                }
+                if (!fi.elementClass.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
+                    throw new IllegalArgumentException(
+                            "LIST field '" + fi.name + "' elementClass " + fi.elementClass.getName()
+                                    + " is not a @ProtocolPacket entity");
+                }
+                validateElementBoundary(fi.elementClass);
+            }
+        }
+    }
+
+    /**
+     * 校验 LIST 元素能否自定边界:最后一个 @ProtocolField 字段必须能定长度
+     * (有 size>0、或有 lengthField、或本身是 LIST/靠 countField)。
+     * 否则元素会「吃剩余字节」,在 count 驱动场景下无法正确分割。
+     */
+    private static void validateElementBoundary(Class<?> elementClass) {
+        java.lang.reflect.Field[] fields = elementClass.getDeclaredFields();
+        java.lang.reflect.Field lastProtocolField = null;
+        for (java.lang.reflect.Field f : fields) {
+            if (f.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolField.class)) {
+                lastProtocolField = f;
+            }
+        }
+        if (lastProtocolField == null) {
+            return;
+        }
+        com.example.demo.protocol.annotation.ProtocolField ann =
+                lastProtocolField.getAnnotation(com.example.demo.protocol.annotation.ProtocolField.class);
+        boolean selfBounded = ann.size() > 0
+                || !ann.lengthField().isEmpty()
+                || ann.elementClass() != void.class;
+        if (!selfBounded) {
+            throw new IllegalArgumentException(
+                    "LIST element " + elementClass.getName() + " last field '"
+                            + lastProtocolField.getName() + "' has no self-boundary "
+                            + "(no size/lengthField and not LIST): count-driven LIST cannot split it");
         }
     }
 

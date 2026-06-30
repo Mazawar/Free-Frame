@@ -1,5 +1,8 @@
 package com.example.demo.protocol.annotation;
 
+import com.example.demo.protocol.core.FieldType;
+import com.example.demo.protocol.core.LengthUnit;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -9,7 +12,24 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ProtocolField {
 
+    /** 字段排列顺序(必填)。 */
     int order();
 
-    int size();
+    /** 位数(取消「8 的倍数」限制)。 */
+    int size() default -1;
+
+    /** 值类型,默认由 Java 字段类型推断。 */
+    FieldType type() default FieldType.INT;
+
+    /** 变长字段:长度引用某字段名(声明式)。 */
+    String lengthField() default "";
+
+    /** lengthField 值的单位。 */
+    LengthUnit lengthUnit() default LengthUnit.BYTES;
+
+    /** 条件字段:"field==值" 满足才出现。 */
+    String presentIf() default "";
+
+    /** STRING 类型字符集。 */
+    String charset() default "UTF-8";
 }

@@ -47,4 +47,7 @@ public @interface ProtocolField {
 
     /** 枚举字段:字段声明为 ProtocolEnum 接口类型时,用此指定具体 enum 类(扫描其常量)。 */
     Class<?> enumClass() default void.class;
+
+    /** 位标志字段:字段类型为 Set,用此指定具体 flag enum 类。 */
+    Class<?> flagClass() default void.class;
 }

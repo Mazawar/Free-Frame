@@ -13,5 +13,7 @@ public enum FieldType {
     /** 协议嵌套:字段是另一个实体类,递归编解码。 */
     NESTED,
     /** count 驱动的同质重复数组:元素是 elementClass 实体,个数由 countField 决定。 */
-    LIST
+    LIST,
+    /** 异质 TLV:每个元素 type+length+value,type 决定 value 实体类(dispatch 分派)。 */
+    LIST_TLV
 }

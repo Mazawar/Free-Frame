@@ -398,6 +398,7 @@ public final class ProtocolCodec<T> {
                 }
                 yield list;
             }
+            case LIST_TLV -> throw new UnsupportedOperationException("FieldType.LIST_TLV not yet supported");
         };
     }
 

@@ -50,4 +50,11 @@ public @interface ProtocolField {
 
     /** 位标志字段:字段类型为 Set,用此指定具体 flag enum 类。 */
     Class<?> flagClass() default void.class;
+
+    /** 异质 TLV 的 sentinel:type == 此值就结束(0x00–0xFF);-1 表示不用(读到末尾停)。 */
+    int tlvEndMarker() default -1;
+
+    /** 异质 TLV 分派表:type→value 实体类名,格式 {"1=SubnetMask", "3=Router"}。
+     *  类名为简单名时按字段声明类所在包解析;也支持全限定名。 */
+    String[] dispatch() default {};
 }

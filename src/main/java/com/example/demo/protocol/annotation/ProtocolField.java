@@ -32,4 +32,10 @@ public @interface ProtocolField {
 
     /** STRING 类型字符集。 */
     String charset() default "UTF-8";
+
+    /** count 驱动(LIST 用):引用元素个数字段名。 */
+    String countField() default "";
+
+    /** LIST 元素的实体类型(LIST 时必填)。 */
+    Class<?> elementClass() default void.class;
 }

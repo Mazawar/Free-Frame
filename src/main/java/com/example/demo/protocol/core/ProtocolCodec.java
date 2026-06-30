@@ -43,6 +43,9 @@ public final class ProtocolCodec<T> {
             BitCursor cursor = new BitCursor(rawData, offset);
 
             for (FieldInfo fi : fixedFields) {
+                if (!evalPresentIf(fi.presentIf, ctx)) {
+                    continue; // 条件不满足:不读字节、不入 ctx
+                }
                 long size = resolveSize(fi, obj, ctx, true);
                 Object value = readValue(fi, cursor, (int) size, ctx);
                 fi.field.setAccessible(true);
@@ -77,6 +80,9 @@ public final class ProtocolCodec<T> {
             // 第一遍:算总位数
             int totalBits = 0;
             for (FieldInfo fi : fixedFields) {
+                if (!evalPresentIf(fi.presentIf, ctx)) {
+                    continue;
+                }
                 long size = resolveSize(fi, obj, ctx, false);
                 if (size < 0) {
                     throw new IllegalStateException("cannot resolve size of field " + fi.name);
@@ -94,6 +100,9 @@ public final class ProtocolCodec<T> {
 
             BitCursor cursor = new BitCursor((totalBits + 7) / 8);
             for (FieldInfo fi : fixedFields) {
+                if (!evalPresentIf(fi.presentIf, ctx)) {
+                    continue;
+                }
                 long size = resolveSize(fi, obj, ctx, false);
                 writeValue(fi, obj, cursor, (int) size, ctx);
             }
@@ -104,6 +113,23 @@ public final class ProtocolCodec<T> {
         } catch (Exception e) {
             throw new RuntimeException("Failed to serialize " + clazz.getName(), e);
         }
+    }
+
+    /** 求值 presentIf 表达式 "field==value",支持十进制/十六进制(0x..) 字面量。 */
+    private static boolean evalPresentIf(String expr, FieldContext ctx) {
+        if (expr == null || expr.isBlank()) {
+            return true;
+        }
+        int eq = expr.indexOf("==");
+        if (eq < 0) {
+            throw new IllegalArgumentException("presentIf must be 'field==value': " + expr);
+        }
+        String left = expr.substring(0, eq).trim();
+        String right = expr.substring(eq + 2).trim();
+        long expected = right.toLowerCase().startsWith("0x")
+                ? Long.parseLong(right.substring(2), 16)
+                : Long.parseLong(right);
+        return ctx.getInt(left) == expected;
     }
 
     // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf) ----

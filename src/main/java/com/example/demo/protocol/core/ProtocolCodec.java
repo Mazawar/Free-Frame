@@ -258,6 +258,9 @@ public final class ProtocolCodec<T> {
                 byte[] seg = cursor.readBytes(size);
                 yield nested.deserialize(seg, 0, seg.length);
             }
+            // LIST 占位:count 驱动数组的读取由 Phase 2a Task 4 实现。
+            case LIST -> throw new UnsupportedOperationException(
+                    "FieldType.LIST not yet supported");
         };
     }
 

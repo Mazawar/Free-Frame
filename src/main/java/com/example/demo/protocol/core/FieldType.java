@@ -11,5 +11,7 @@ public enum FieldType {
     /** 文本 String,配 charset。 */
     STRING,
     /** 协议嵌套:字段是另一个实体类,递归编解码。 */
-    NESTED
+    NESTED,
+    /** count 驱动的同质重复数组:元素是 elementClass 实体,个数由 countField 决定。 */
+    LIST
 }

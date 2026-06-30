@@ -100,6 +100,18 @@ public final class BitCursor {
         return java.util.Arrays.copyOfRange(data, bytePos, data.length);
     }
 
+    /** 偷看当前字节(游标必须字节对齐),不推进游标。供 sentinel 判定用。 */
+    public int peekByte() {
+        if (bitPos % 8 != 0) {
+            throw new IllegalStateException("peekByte requires byte-aligned cursor, bitPos=" + bitPos);
+        }
+        int byteIdx = baseByte + bitPos / 8;
+        if (byteIdx >= data.length) {
+            return -1;  // 无字节可读(已到末尾)
+        }
+        return data[byteIdx] & 0xFF;
+    }
+
     /** 推进游标 n 位(不读取,仅移动)。 */
     public void skipBits(int n) {
         if (n < 0) {

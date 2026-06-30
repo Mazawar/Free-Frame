@@ -53,4 +53,14 @@ class BitCursorTest {
         BitCursor c = new BitCursor(data, 1); // 从第1字节起
         assertThat(c.readBits(8)).isEqualTo(0x34L);
     }
+
+    @Test
+    void peekByteDoesNotAdvanceCursor() {
+        byte[] data = {0x12, 0x34};
+        BitCursor c = new BitCursor(data, 0);
+        assertThat(c.peekByte()).isEqualTo(0x12);
+        assertThat(c.bitOffset()).isEqualTo(0);  // 未推进
+        c.readBits(8);
+        assertThat(c.peekByte()).isEqualTo(0x34);
+    }
 }

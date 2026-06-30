@@ -142,10 +142,23 @@ public enum TcpFlag implements ProtocolFlag {
 private Set<TcpFlag> flags;   // SYN+ACK → 0x12;读 0x12 → EnumSet.of(SYN,ACK)
 ```
 
+### Phase 2c1(本版本新增)
+
+- **异质 TLV** —— 标准 TLV(type+length 各1字节 + value)按 type 分派到不同 value 实体,sentinel 终止,未知 type 跳过。`dispatch={"1=SubnetMask","3=Router"}` 声明分派表。
+
+示例:
+
+```java
+@ProtocolField(type=FieldType.LIST_TLV, tlvEndMarker=0xFF,
+    dispatch={"1=SubnetMask", "3=Router", "53=DhcpMsgType"})
+private List<Object> options;   // type=1→SubnetMask, type=3→Router, type=0xFF→End
+```
+
 ### 仍未覆盖(后续 Phase)
 
+- 非标准 TLV 元素结构(如 TCP Options 的 NOP 无 length、固定长度)
 - 元素内字段级 sentinel(如 DNS 的「label 长度=0 表示结束」)
-- 异质 TLV(type → 子结构分派,如 TCP/DHCP Options)
+- 未知 TLV type 零丢失(RawOption 占位)
 - 复杂条件(位掩码 / `&&`)
 - 校验和 / CRC 钩子(IPv4/TCP/UDP 校验和、伪首部)
 - 流重组 / 分片重组(过程性,留钩子)
@@ -158,9 +171,11 @@ private Set<TcpFlag> flags;   // SYN+ACK → 0x12;读 0x12 → EnumSet.of(SYN,AC
   - Phase 2b:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2b-design.md`
   - Phase 2d:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2d-design.md`
   - Phase 2e:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2e-design.md`
+  - Phase 2c1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c1-design.md`
 - 实施计划:
   - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
   - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`
   - Phase 2b:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2b.md`
   - Phase 2d:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2d.md`
   - Phase 2e:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2e.md`
+  - Phase 2c1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c1.md`

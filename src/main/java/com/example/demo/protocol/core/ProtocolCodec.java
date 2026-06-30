@@ -376,7 +376,7 @@ public final class ProtocolCodec<T> {
         }
         FieldType type = effectiveType(fi);
         return switch (type) {
-            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED, fi.enumClass);
+            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED, fi.enumClass, fi.flagClass);
             case BYTES -> cursor.readBytes(size);
             case STRING -> new String(cursor.readBytes(size), Charset.forName(fi.charset));
             case NESTED -> {
@@ -545,11 +545,15 @@ public final class ProtocolCodec<T> {
         return ((ProtocolCodec) codec).serialize(value);
     }
 
-    private static Object convertToFieldType(Class<?> type, long val, boolean unsigned, Class<?> enumClass) {
+    private static Object convertToFieldType(Class<?> type, long val, boolean unsigned, Class<?> enumClass, Class<?> flagClass) {
         // enum 字段:优先用注解的 enumClass,否则用字段 type(若它本身就是具体 enum)
         Class<?> effectiveEnumType = (enumClass != null && enumClass != void.class) ? enumClass : type;
         if (ProtocolEnum.class.isAssignableFrom(effectiveEnumType) && Enum.class.isAssignableFrom(effectiveEnumType)) {
             return enumFromValue(effectiveEnumType, (int) val);
+        }
+        // flag 字段:Set<ProtocolFlag>,按位拆解成 EnumSet(保留位忽略)
+        if (flagClass != null && flagClass != void.class && java.util.Set.class.isAssignableFrom(type)) {
+            return flagsFromValue(flagClass, (int) val);
         }
         if (unsigned) {
             if (type == int.class || type == Integer.class) return (int) val;
@@ -576,9 +580,34 @@ public final class ProtocolCodec<T> {
         return new UnknownEnumValue(value, (Class<? extends Enum<?>>) enumType);
     }
 
+    /** 把整数按位拆解成 EnumSet;保留位(flagClass 未覆盖的位)忽略(C1)。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Object flagsFromValue(Class<?> flagClass, int value) {
+        Object[] constants = flagClass.getEnumConstants();
+        java.util.EnumSet result = java.util.EnumSet.noneOf((Class<Enum>) flagClass);
+        if (constants != null) {
+            for (Object c : constants) {
+                if (((ProtocolFlag) c).mask() != 0 && (value & ((ProtocolFlag) c).mask()) != 0) {
+                    result.add(c);
+                }
+            }
+        }
+        return result;
+    }
+
     private static long convertFromFieldType(Object value) {
         if (value instanceof ProtocolEnum e) {
             return e.value();
+        }
+        // flag 字段:Set<ProtocolFlag> → 各 mask 按位 OR
+        if (value instanceof java.util.Set<?> set) {
+            long orResult = 0;
+            for (Object o : set) {
+                if (o instanceof ProtocolFlag f) {
+                    orResult |= f.mask();
+                }
+            }
+            return orResult;
         }
         if (value == null) {
             return 0;
@@ -621,6 +650,7 @@ public final class ProtocolCodec<T> {
         final int lengthAdjust;
         final int sentinel;
         final Class<?> enumClass;
+        final Class<?> flagClass;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -639,6 +669,7 @@ public final class ProtocolCodec<T> {
             this.lengthAdjust = ann.lengthAdjust();
             this.sentinel = ann.sentinel();
             this.enumClass = ann.enumClass();
+            this.flagClass = ann.flagClass();
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
@@ -661,6 +692,7 @@ public final class ProtocolCodec<T> {
             this.lengthAdjust = 0;
             this.sentinel = -1;
             this.enumClass = void.class;
+            this.flagClass = void.class;
         }
     }
 

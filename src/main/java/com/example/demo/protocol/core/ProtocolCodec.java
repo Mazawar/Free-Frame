@@ -782,6 +782,15 @@ public final class ProtocolCodec<T> {
             }
             this.dispatchMap = fwd;
             this.reverseDispatchMap = rev;
+            // 校验:dispatch 类必须存在且是 @ProtocolPacket 实体
+            Class<?> ctx = f.getDeclaringClass();
+            for (String cn : fwd.values()) {
+                Class<?> c = resolveDispatchClass(cn, ctx);
+                if (!c.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
+                    throw new IllegalArgumentException(
+                            "dispatch class " + cn + " is not a @ProtocolPacket entity");
+                }
+            }
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */

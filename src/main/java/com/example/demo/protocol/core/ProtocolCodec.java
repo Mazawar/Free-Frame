@@ -242,6 +242,10 @@ public final class ProtocolCodec<T> {
 
     // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf;Task 10 扩充动态 NESTED) ----
     private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize, int remainingBits) throws Exception {
+        // -2. LIST_TLV:总位数 = 各元素(type 1B + length 1B + value)累加 + (endMarker 则 +8)
+        if (effectiveType(fi) == FieldType.LIST_TLV) {
+            return tlvTotalBits(fi, obj);
+        }
         // -1. sentinel:数据位数 + 8(标记字节)
         if (fi.sentinel >= 0) {
             return sentinelTotalBits(fi, obj);
@@ -322,6 +326,22 @@ public final class ProtocolCodec<T> {
         return total;
     }
 
+    /** 计算 LIST_TLV 字段总位数(供 resolveSize 序列化用)。 */
+    private long tlvTotalBits(FieldInfo fi, Object obj) throws Exception {
+        fi.field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
+        long total = 0;
+        for (Object elem : list) {
+            byte[] valueBytes = serializeNested(codecFor(elem.getClass()), elem);
+            total += 8 + 8 + valueBytes.length * 8L;
+        }
+        if (fi.tlvEndMarker >= 0) {
+            total += 8;  // sentinel 字节
+        }
+        return total;
+    }
+
     /**
      * 计算 sentinel 字段总位数(供 resolveSize 序列化用):数据位数 + 8(标记字节)。
      * - BYTES:数据 = 字段当前字节数
@@ -398,8 +418,36 @@ public final class ProtocolCodec<T> {
                 }
                 yield list;
             }
-            case LIST_TLV -> throw new UnsupportedOperationException("FieldType.LIST_TLV not yet supported");
+            case LIST_TLV -> {
+                yield readTlvValue(fi, cursor);
+            }
         };
+    }
+
+    /** LIST_TLV 反序列化:循环读 type+length+value,sentinel 终止,未知 type 跳过。 */
+    private Object readTlvValue(FieldInfo fi, BitCursor cursor) throws Exception {
+        Class<?> contextClass = fi.field.getDeclaringClass();
+        java.util.List<Object> list = new java.util.ArrayList<>();
+        while (true) {
+            int peek = cursor.peekByte();
+            if (peek < 0) break;  // 到末尾
+            if (fi.tlvEndMarker >= 0 && peek == fi.tlvEndMarker) {
+                cursor.skipBits(8);  // 消费 sentinel
+                break;
+            }
+            int type = (int) cursor.readBits(8);
+            int length = (int) cursor.readBits(8);
+            String className = fi.dispatchMap.get(type);
+            if (className == null) {
+                cursor.skipBits(length * 8);  // 未知 type 跳过
+                continue;
+            }
+            Class<?> elemClass = resolveDispatchClass(className, contextClass);
+            byte[] valueBytes = cursor.readBytes(length * 8);
+            Object elem = codecFor(elemClass).deserialize(valueBytes, 0, valueBytes.length);
+            list.add(elem);
+        }
+        return list;
     }
 
     /**
@@ -452,6 +500,11 @@ public final class ProtocolCodec<T> {
             writeSentinelValue(fi, obj, cursor);
             return;
         }
+        // LIST_TLV 序列化:每个元素 type+length+value,末尾 sentinel
+        if (effectiveType(fi) == FieldType.LIST_TLV) {
+            writeTlvValue(fi, obj, cursor);
+            return;
+        }
         FieldType type = effectiveType(fi);
         fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
@@ -500,6 +553,27 @@ public final class ProtocolCodec<T> {
         cursor.writeBits(fi.sentinel, 8);  // 追加标记字节
     }
 
+    /** LIST_TLV 序列化:每个元素 type+length+value,末尾追加 sentinel。 */
+    @SuppressWarnings("unchecked")
+    private void writeTlvValue(FieldInfo fi, Object obj, BitCursor cursor) throws Exception {
+        fi.field.setAccessible(true);
+        java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
+        for (Object elem : list) {
+            Integer type = fi.reverseDispatchMap.get(elem.getClass().getSimpleName());
+            if (type == null) {
+                throw new IllegalStateException(
+                        "TLV element " + elem.getClass().getName() + " not in dispatch table");
+            }
+            byte[] valueBytes = serializeNested(codecFor(elem.getClass()), elem);
+            cursor.writeBits(type, 8);
+            cursor.writeBits(valueBytes.length, 8);
+            cursor.writeBytes(valueBytes);
+        }
+        if (fi.tlvEndMarker >= 0) {
+            cursor.writeBits(fi.tlvEndMarker, 8);
+        }
+    }
+
     private FieldType effectiveType(FieldInfo fi) {
         if (fi.type != FieldType.INT) {
             return fi.type; // 显式指定
@@ -535,6 +609,20 @@ public final class ProtocolCodec<T> {
         ProtocolCodec<?> c = new ProtocolCodec<>(type);
         NESTED_CACHE.put(type, c);
         return c;
+    }
+
+    /** 解析 dispatch 类名:简单名按 declaringClass 所在包,全限定名直接加载。 */
+    private static Class<?> resolveDispatchClass(String className, Class<?> contextClass) {
+        if (className.contains(".")) {
+            try { return Class.forName(className); } catch (ClassNotFoundException e) {
+                throw new IllegalArgumentException("dispatch class not found: " + className, e);
+            }
+        }
+        String pkg = contextClass.getPackageName();
+        String fqn = pkg.isEmpty() ? className : pkg + "." + className;
+        try { return Class.forName(fqn); } catch (ClassNotFoundException e) {
+            throw new IllegalArgumentException("dispatch class not found: " + className + " (resolved " + fqn + ")", e);
+        }
     }
 
     /**
@@ -652,6 +740,10 @@ public final class ProtocolCodec<T> {
         final int sentinel;
         final Class<?> enumClass;
         final Class<?> flagClass;
+        final int tlvEndMarker;
+        final String[] dispatch;
+        final java.util.Map<Integer,String> dispatchMap;
+        final java.util.Map<String,Integer> reverseDispatchMap;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -671,6 +763,25 @@ public final class ProtocolCodec<T> {
             this.sentinel = ann.sentinel();
             this.enumClass = ann.enumClass();
             this.flagClass = ann.flagClass();
+            this.tlvEndMarker = ann.tlvEndMarker();
+            this.dispatch = ann.dispatch();
+            // 解析 dispatch 为正/反向 Map
+            // 正向:type → 类名字符串(反序列化用 resolveDispatchClass 加载)
+            // 反向:类简单名 → type(序列化用 elem.getClass().getSimpleName() 反查)
+            java.util.Map<Integer,String> fwd = new java.util.HashMap<>();
+            java.util.Map<String,Integer> rev = new java.util.HashMap<>();
+            for (String entry : this.dispatch) {
+                int eq = entry.indexOf('=');
+                if (eq < 0) throw new IllegalArgumentException("dispatch entry must be 'type=ClassName': " + entry);
+                int t = Integer.parseInt(entry.substring(0, eq).trim());
+                String cn = entry.substring(eq + 1).trim();
+                if (fwd.containsKey(t)) throw new IllegalArgumentException("dispatch type " + t + " duplicated");
+                fwd.put(t, cn);
+                String simple = cn.contains(".") ? cn.substring(cn.lastIndexOf('.') + 1) : cn;
+                rev.put(simple, t);
+            }
+            this.dispatchMap = fwd;
+            this.reverseDispatchMap = rev;
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
@@ -694,6 +805,10 @@ public final class ProtocolCodec<T> {
             this.sentinel = -1;
             this.enumClass = void.class;
             this.flagClass = void.class;
+            this.tlvEndMarker = -1;
+            this.dispatch = new String[0];
+            this.dispatchMap = java.util.Collections.emptyMap();
+            this.reverseDispatchMap = java.util.Collections.emptyMap();
         }
     }
 

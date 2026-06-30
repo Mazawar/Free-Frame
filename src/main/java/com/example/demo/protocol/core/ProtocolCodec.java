@@ -546,6 +546,10 @@ public final class ProtocolCodec<T> {
     }
 
     private static Object convertToFieldType(Class<?> type, long val, boolean unsigned) {
+        // enum 字段:type 是 ProtocolEnum 的 enum
+        if (ProtocolEnum.class.isAssignableFrom(type) && Enum.class.isAssignableFrom(type)) {
+            return enumFromValue(type, (int) val);
+        }
         if (unsigned) {
             if (type == int.class || type == Integer.class) return (int) val;
             if (type == long.class || type == Long.class) return val;
@@ -557,7 +561,24 @@ public final class ProtocolCodec<T> {
         return val;
     }
 
+    /** 把整数转成 enum 常量;找不到匹配值返回 UnknownEnumValue(携带原始 int)。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static Object enumFromValue(Class<?> enumType, int value) {
+        Object[] constants = enumType.getEnumConstants();
+        if (constants != null) {
+            for (Object c : constants) {
+                if (((ProtocolEnum) c).value() == value) {
+                    return c;
+                }
+            }
+        }
+        return new UnknownEnumValue(value, (Class<? extends Enum<?>>) enumType);
+    }
+
     private static long convertFromFieldType(Object value) {
+        if (value instanceof ProtocolEnum e) {
+            return e.value();
+        }
         if (value == null) {
             return 0;
         }

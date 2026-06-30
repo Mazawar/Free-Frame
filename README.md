@@ -69,14 +69,40 @@ byte[] bytes = codec.serialize(header);     // 实体 → 字节
 Ipv4Header parsed = codec.deserialize(bytes); // 字节 → 实体
 ```
 
-### Phase 1 未覆盖(后续 Phase)
+### Phase 2a(本版本新增)
 
-- TLV / 集合语义(`COUNT` / 重复不定个数字段)
+- **count 驱动的同质重复数组** —— `type=LIST` + `countField` + `elementClass`,`List<X>` 字段,元素是另一个实体类(如 DNS label)。元素必须自定边界(注册期校验);序列化时要求 `countField == list.size()`。
+
+示例(DNS Question 段,count 驱动变体):
+
+```java
+@ProtocolPacket
+public class DnsLabel {
+    @ProtocolField(order=1, size=8) private int length;
+    @ProtocolField(order=2, type=BYTES, lengthField="length") private byte[] content;
+}
+
+@ProtocolPacket
+public class DnsQuestion {
+    @ProtocolField(order=1, size=8) private int labelCount;
+    @ProtocolField(order=2, type=LIST, countField="labelCount", elementClass=DnsLabel.class)
+    private List<DnsLabel> labels;
+}
+```
+
+### 仍未覆盖(后续 Phase)
+
+- length 驱动的数组 / 结束标记驱动(如真实 DNS 的 0x00、DHCP 的 0xFF)
+- 异质 TLV(type → 子结构分派,如 TCP/DHCP Options)
 - 复杂条件(位掩码 / `&&`)
 - 校验和 / CRC 钩子(IPv4/TCP/UDP 校验和、伪首部)
 - 流重组 / 分片重组(过程性,留钩子)
 
 ### 设计文档
 
-- 设计 spec:`docs/superpowers/specs/2026-06-30-protocol-codec-phase1-design.md`
-- 实施计划:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
+- 设计 spec:
+  - Phase 1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase1-design.md`
+  - Phase 2a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2a-design.md`
+- 实施计划:
+  - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
+  - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`

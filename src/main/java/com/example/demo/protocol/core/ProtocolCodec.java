@@ -234,10 +234,13 @@ public final class ProtocolCodec<T> {
                 return s;
             }
         }
-        // 2. 声明式 lengthField(Task 6 启用)
+        // 2. 声明式 lengthField(Phase 2b 加 lengthAdjust 偏移)
         if (!fi.lengthField.isEmpty() && ctx.hasRead(fi.lengthField)) {
             int ref = ctx.getInt(fi.lengthField);
-            return fi.lengthUnit == LengthUnit.BYTES ? ref * 8L : ref;
+            if (fi.lengthUnit == LengthUnit.BYTES) {
+                return (ref + fi.lengthAdjust) * 8L;
+            }
+            return ref;  // BITS 单位不应用字节偏移
         }
         // 3. NESTED:嵌套实体的位长度(取整到整字节——readBytes/writeBytes 要求整字节 & 字节对齐)
         if (effectiveType(fi) == FieldType.NESTED) {
@@ -476,6 +479,8 @@ public final class ProtocolCodec<T> {
         final String charset;
         final String countField;
         final Class<?> elementClass;
+        final int lengthAdjust;
+        final int sentinel;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -491,6 +496,8 @@ public final class ProtocolCodec<T> {
             this.charset = ann.charset();
             this.countField = ann.countField();
             this.elementClass = ann.elementClass();
+            this.lengthAdjust = ann.lengthAdjust();
+            this.sentinel = ann.sentinel();
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
@@ -510,6 +517,8 @@ public final class ProtocolCodec<T> {
             this.charset = "UTF-8";
             this.countField = "";
             this.elementClass = void.class;
+            this.lengthAdjust = 0;
+            this.sentinel = -1;
         }
     }
 

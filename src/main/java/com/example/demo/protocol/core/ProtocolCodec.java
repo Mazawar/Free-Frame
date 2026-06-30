@@ -88,6 +88,21 @@ public final class ProtocolCodec<T> {
                 }
                 validateElementBoundary(fi.elementClass);
             }
+            // sentinel 校验(Phase 2b)
+            if (fi.sentinel >= 0) {
+                if (fi.sentinel > 0xFF) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "' sentinel=" + fi.sentinel + " out of range (0x00-0xFF)");
+                }
+                if (!fi.countField.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': sentinel and countField are mutually exclusive");
+                }
+                if (!fi.lengthField.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': sentinel and lengthField are mutually exclusive");
+                }
+            }
         }
     }
 

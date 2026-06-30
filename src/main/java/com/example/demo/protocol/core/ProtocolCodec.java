@@ -148,7 +148,7 @@ public final class ProtocolCodec<T> {
             }
             return cursor.bytes();
         } catch (Exception e) {
-            throw new RuntimeException("Failed to serialize " + clazz.getName(), e);
+            throw new RuntimeException("Failed to serialize " + clazz.getName() + ": " + e.getMessage(), e);
         }
     }
 
@@ -171,6 +171,10 @@ public final class ProtocolCodec<T> {
 
     // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf;Task 10 扩充动态 NESTED) ----
     private long resolveSize(FieldInfo fi, Object obj, FieldContext ctx, boolean deserialize, int remainingBits) throws Exception {
+        // 0. LIST:总位数 = 各元素 serialize 后累加
+        if (effectiveType(fi) == FieldType.LIST) {
+            return listTotalBits(fi, obj);
+        }
         // 1. 钩子优先
         if (obj instanceof DynamicSize ds) {
             long s = ds.computeSize(fi.name, ctx);
@@ -224,6 +228,22 @@ public final class ProtocolCodec<T> {
         throw new IllegalStateException("cannot resolve size of field " + fi.name);
     }
 
+    /** 计算 LIST 字段总位数(供 resolveSize 用;主要服务序列化端两遍循环)。 */
+    private long listTotalBits(FieldInfo fi, Object obj) throws Exception {
+        fi.field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
+        if (list == null) {
+            return 0;
+        }
+        ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+        long total = 0;
+        for (Object elem : list) {
+            total += serializeNested(elementCodec, elem).length * 8L;
+        }
+        return total;
+    }
+
     /**
      * 计算某实体类型「全固定字段」的位总和(供 NESTED 定长解析)。
      * 任一 {@code @ProtocolField} 字段无确定 size(≤0)即抛异常——这意味着
@@ -259,8 +279,19 @@ public final class ProtocolCodec<T> {
                 yield nested.deserialize(seg, 0, seg.length);
             }
             // LIST 占位:count 驱动数组的读取由 Phase 2a Task 4 实现。
-            case LIST -> throw new UnsupportedOperationException(
-                    "FieldType.LIST not yet supported");
+            case LIST -> {
+                int count = ctx.getInt(fi.countField);
+                ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+                java.util.List<Object> list = new java.util.ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    byte[] rest = cursor.remainingFromCursor();
+                    Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                    list.add(elem);
+                    int consumedBits = (int) (serializeNested(elementCodec, elem).length * 8L);
+                    cursor.skipBits(consumedBits);
+                }
+                yield list;
+            }
         };
     }
 
@@ -279,6 +310,20 @@ public final class ProtocolCodec<T> {
                 ProtocolCodec<?> nested = codecFor(fi.field.getType());
                 cursor.writeBytes(serializeNested(nested, value));
             }
+            case LIST -> {
+                @SuppressWarnings("unchecked")
+                java.util.List<Object> list = (java.util.List<Object>) value;
+                int declared = ctx.getInt(fi.countField);
+                if (declared != list.size()) {
+                    throw new IllegalStateException(
+                            "LIST field '" + fi.name + "': countField '" + fi.countField
+                                    + "'=" + declared + " but list.size()=" + list.size());
+                }
+                ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
+                for (Object elem : list) {
+                    cursor.writeBytes(serializeNested(elementCodec, elem));
+                }
+            }
         }
     }
 
@@ -286,8 +331,11 @@ public final class ProtocolCodec<T> {
         if (fi.type != FieldType.INT) {
             return fi.type; // 显式指定
         }
-        // INT 默认:按 Java 类型推断(BYTES/STRING/NESTED)
+        // INT 默认:按 Java 类型推断(BYTES/STRING/NESTED/LIST)
         Class<?> t = fi.field.getType();
+        if (java.util.List.class.isAssignableFrom(t)) {
+            return FieldType.LIST;
+        }
         if (t == byte[].class) {
             return FieldType.BYTES;
         }
@@ -374,6 +422,8 @@ public final class ProtocolCodec<T> {
         final LengthUnit lengthUnit;
         final String presentIf;
         final String charset;
+        final String countField;
+        final Class<?> elementClass;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -387,6 +437,8 @@ public final class ProtocolCodec<T> {
             this.lengthUnit = ann.lengthUnit();
             this.presentIf = ann.presentIf();
             this.charset = ann.charset();
+            this.countField = ann.countField();
+            this.elementClass = ann.elementClass();
         }
 
         /** @Payload 字段构造:无 @ProtocolField,仅需字段引用(其余属性用占位值)。 */
@@ -404,6 +456,8 @@ public final class ProtocolCodec<T> {
             this.lengthUnit = LengthUnit.BYTES;
             this.presentIf = "";
             this.charset = "UTF-8";
+            this.countField = "";
+            this.elementClass = void.class;
         }
     }
 

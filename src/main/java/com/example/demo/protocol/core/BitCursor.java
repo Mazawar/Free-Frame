@@ -91,6 +91,23 @@ public final class BitCursor {
         return bitPos;
     }
 
+    /** 返回从当前游标位置(按字节对齐)起的剩余字节片段。游标必须字节对齐。 */
+    public byte[] remainingFromCursor() {
+        if (bitPos % 8 != 0) {
+            throw new IllegalStateException("remainingFromCursor requires byte-aligned cursor, bitPos=" + bitPos);
+        }
+        int bytePos = baseByte + bitPos / 8;
+        return java.util.Arrays.copyOfRange(data, bytePos, data.length);
+    }
+
+    /** 推进游标 n 位(不读取,仅移动)。 */
+    public void skipBits(int n) {
+        if (n < 0) {
+            throw new IllegalArgumentException("skipBits n must be >= 0, got " + n);
+        }
+        bitPos += n;
+    }
+
     public byte[] bytes() {
         return data;
     }

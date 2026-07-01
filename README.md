@@ -171,9 +171,25 @@ public class Ipv4HeaderWithChecksum implements Checksum {
 }
 ```
 
+**TCP/UDP 伪首部校验和(Phase 3a)**:TCP 段的校验和覆盖伪首部(源IP/目的IP/协议来自外层 IP 包)。实体用 transient 字段存伪首部信息,`compute` 拼伪首部 + serialized 反码求和。parity 对照 pcap4j 通过。
+
+```java
+public class TcpSegmentWithChecksum implements Checksum {
+    // ... TCP 字段 ...
+    private transient int pseudoSourceIp;   // 用户装配时填(来自外层 IP)
+    private transient int pseudoDestIp;
+    private transient int pseudoProtocol;   // TCP=6
+
+    public long compute(String field, byte[] serialized) {
+        byte[] pseudo = buildPseudoHeader(serialized.length);
+        return onesComplementSum(concat(pseudo, serialized));
+    }
+}
+```
+
 ### 仍未覆盖(后续)
 
-- TCP/UDP 校验和(含伪首部、跨层依赖)
+- UDP 校验和实体(同 TCP 机制)
 - CRC16(Modbus 等)
 - 校验和反序列化端验证(结果存实体)
 - 非标准 TLV 元素结构(如 TCP Options 的 NOP 无 length、固定长度)
@@ -192,6 +208,7 @@ public class Ipv4HeaderWithChecksum implements Checksum {
   - Phase 2e:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2e-design.md`
   - Phase 2c1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c1-design.md`
   - Phase 3:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3-design.md`
+  - Phase 3a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3a-design.md`
 - 实施计划:
   - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
   - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`
@@ -200,3 +217,4 @@ public class Ipv4HeaderWithChecksum implements Checksum {
   - Phase 2e:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2e.md`
   - Phase 2c1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c1.md`
   - Phase 3:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3.md`
+  - Phase 3a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3a.md`

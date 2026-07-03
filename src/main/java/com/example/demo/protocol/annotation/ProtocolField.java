@@ -45,6 +45,12 @@ public @interface ProtocolField {
     /** sentinel 结束标记字节值(0x00–0xFF);-1 表示不用。读到该字节就结束。与 countField/lengthField 互斥。 */
     int sentinel() default -1;
 
+    /** LIST 元素内 sentinel:元素里哪个字段判定终止(peek 该字段值)。与 countField/sentinel 互斥。 */
+    String sentinelOn() default "";
+
+    /** sentinelOn 字段==此值则终止 LIST。 */
+    long sentinelValue() default 0;
+
     /** 枚举字段:字段声明为 ProtocolEnum 接口类型时,用此指定具体 enum 类(扫描其常量)。 */
     Class<?> enumClass() default void.class;
 

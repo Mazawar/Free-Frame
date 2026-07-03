@@ -63,8 +63,8 @@ public final class ProtocolCodec<T> {
             }
             // LIST 校验
             if (fi.elementClass != void.class) {
-                // count 驱动校验:sentinel 驱动的 LIST 不需要 countField(二者互斥)
-                if (fi.sentinel < 0) {
+                // count 驱动校验:sentinel/sentinelOn 驱动的 LIST 不需要 countField(互斥)
+                if (fi.sentinel < 0 && fi.sentinelOn.isEmpty()) {
                     if (fi.countField.isEmpty()) {
                         throw new IllegalArgumentException(
                                 "LIST field '" + fi.name + "' missing countField");
@@ -101,6 +101,17 @@ public final class ProtocolCodec<T> {
                 if (!fi.lengthField.isEmpty()) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': sentinel and lengthField are mutually exclusive");
+                }
+            }
+            // sentinelOn 校验(Phase 2c2:元素内 sentinel)
+            if (!fi.sentinelOn.isEmpty()) {
+                if (!fi.countField.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': sentinelOn and countField are mutually exclusive");
+                }
+                if (fi.sentinel >= 0) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': sentinelOn and sentinel are mutually exclusive");
                 }
             }
         }
@@ -361,6 +372,9 @@ public final class ProtocolCodec<T> {
         for (Object elem : list) {
             total += serializeNested(elementCodec, elem).length * 8L;
         }
+        if (!fi.sentinelOn.isEmpty()) {
+            total += fi.sentinelOnSize;  // 末尾追加 sentinel 标记位
+        }
         return total;
     }
 
@@ -427,6 +441,24 @@ public final class ProtocolCodec<T> {
         return sum;
     }
 
+    /** 查 elementClass 里 sentinelOn 字段的 size;字段不存在或 size<=0 抛异常。 */
+    private static int lookupSentinelOnSize(Class<?> elementClass, String sentinelOn) {
+        for (Field f : elementClass.getDeclaredFields()) {
+            if (f.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolField.class)
+                    && f.getName().equals(sentinelOn)) {
+                int sz = f.getAnnotation(com.example.demo.protocol.annotation.ProtocolField.class).size();
+                if (sz <= 0) {
+                    throw new IllegalArgumentException(
+                            "sentinelOn field '" + sentinelOn + "' in " + elementClass.getName()
+                                    + " has no fixed size");
+                }
+                return sz;
+            }
+        }
+        throw new IllegalArgumentException(
+                "sentinelOn field '" + sentinelOn + "' not found in " + elementClass.getName());
+    }
+
     private Object readValue(FieldInfo fi, BitCursor cursor, int size, FieldContext ctx) throws Exception {
         // sentinel 反序列化(跨 BYTES/LIST,优先)
         if (fi.sentinel >= 0) {
@@ -444,15 +476,31 @@ public final class ProtocolCodec<T> {
             }
             // LIST 占位:count 驱动数组的读取由 Phase 2a Task 4 实现。
             case LIST -> {
-                int count = ctx.getInt(fi.countField);
                 ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
-                java.util.List<Object> list = new java.util.ArrayList<>(count);
-                for (int i = 0; i < count; i++) {
-                    byte[] rest = cursor.remainingFromCursor();
-                    Object elem = elementCodec.deserialize(rest, 0, rest.length);
-                    list.add(elem);
-                    int consumedBits = (int) (serializeNested(elementCodec, elem).length * 8L);
-                    cursor.skipBits(consumedBits);
+                java.util.List<Object> list = new java.util.ArrayList<>();
+                if (!fi.sentinelOn.isEmpty()) {
+                    // 元素内 sentinel:peek sentinelOn 字段值,==sentinelValue 则停
+                    while (true) {
+                        long peek = cursor.peekBits(fi.sentinelOnSize);
+                        if (peek < 0) break;  // 到末尾
+                        if (peek == fi.sentinelValue) {
+                            cursor.skipBits(fi.sentinelOnSize);  // 消费结束标记
+                            break;
+                        }
+                        byte[] rest = cursor.remainingFromCursor();
+                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        list.add(elem);
+                        cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                    }
+                } else {
+                    // count 驱动(Phase 2a 原逻辑)
+                    int count = ctx.getInt(fi.countField);
+                    for (int i = 0; i < count; i++) {
+                        byte[] rest = cursor.remainingFromCursor();
+                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        list.add(elem);
+                        cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                    }
                 }
                 yield list;
             }
@@ -560,15 +608,24 @@ public final class ProtocolCodec<T> {
             case LIST -> {
                 @SuppressWarnings("unchecked")
                 java.util.List<Object> list = (java.util.List<Object>) value;
-                int declared = ctx.getInt(fi.countField);
-                if (declared != list.size()) {
-                    throw new IllegalStateException(
-                            "LIST field '" + fi.name + "': countField '" + fi.countField
-                                    + "'=" + declared + " but list.size()=" + list.size());
-                }
                 ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
-                for (Object elem : list) {
-                    cursor.writeBytes(serializeNested(elementCodec, elem));
+                if (!fi.sentinelOn.isEmpty()) {
+                    // 元素内 sentinel:写元素 + 末尾追加 sentinelValue
+                    for (Object elem : list) {
+                        cursor.writeBytes(serializeNested(elementCodec, elem));
+                    }
+                    cursor.writeBits(fi.sentinelValue, fi.sentinelOnSize);
+                } else {
+                    // count 驱动(Phase 2a 原逻辑)
+                    int declared = ctx.getInt(fi.countField);
+                    if (declared != list.size()) {
+                        throw new IllegalStateException(
+                                "LIST field '" + fi.name + "': countField '" + fi.countField
+                                        + "'=" + declared + " but list.size()=" + list.size());
+                    }
+                    for (Object elem : list) {
+                        cursor.writeBytes(serializeNested(elementCodec, elem));
+                    }
                 }
             }
         }
@@ -776,6 +833,9 @@ public final class ProtocolCodec<T> {
         final Class<?> elementClass;
         final int lengthAdjust;
         final int sentinel;
+        final String sentinelOn;
+        final long sentinelValue;
+        final int sentinelOnSize;
         final Class<?> enumClass;
         final Class<?> flagClass;
         final int tlvEndMarker;
@@ -800,6 +860,17 @@ public final class ProtocolCodec<T> {
             this.elementClass = ann.elementClass();
             this.lengthAdjust = ann.lengthAdjust();
             this.sentinel = ann.sentinel();
+            this.sentinelOn = ann.sentinelOn();
+            this.sentinelValue = ann.sentinelValue();
+            if (!this.sentinelOn.isEmpty()) {
+                if (this.elementClass == void.class) {
+                    throw new IllegalArgumentException(
+                            "field '" + this.name + "' sentinelOn requires elementClass");
+                }
+                this.sentinelOnSize = lookupSentinelOnSize(this.elementClass, this.sentinelOn);
+            } else {
+                this.sentinelOnSize = 0;
+            }
             this.enumClass = ann.enumClass();
             this.flagClass = ann.flagClass();
             this.tlvEndMarker = ann.tlvEndMarker();
@@ -852,6 +923,9 @@ public final class ProtocolCodec<T> {
             this.elementClass = void.class;
             this.lengthAdjust = 0;
             this.sentinel = -1;
+            this.sentinelOn = "";
+            this.sentinelValue = 0;
+            this.sentinelOnSize = 0;
             this.enumClass = void.class;
             this.flagClass = void.class;
             this.tlvEndMarker = -1;

@@ -112,6 +112,24 @@ public final class BitCursor {
         return data[byteIdx] & 0xFF;
     }
 
+    /** 偷看当前游标起的 size 位(不推进)。size 须 0..63。不足 size 位(到末尾)返回 -1。 */
+    public long peekBits(int size) {
+        if (size < 0 || size > 63) {
+            throw new IllegalArgumentException("peekBits size must be 0..63, got " + size);
+        }
+        long value = 0;
+        for (int i = 0; i < size; i++) {
+            int absBit = baseByte * 8 + bitPos + i;
+            int byteIdx = absBit / 8;
+            if (byteIdx >= data.length) {
+                return -1;  // 不足 size 位(到末尾)
+            }
+            int bitInByte = 7 - (absBit % 8);
+            value = (value << 1) | ((data[byteIdx] >> bitInByte) & 1);
+        }
+        return value;
+    }
+
     /** 推进游标 n 位(不读取,仅移动)。 */
     public void skipBits(int n) {
         if (n < 0) {

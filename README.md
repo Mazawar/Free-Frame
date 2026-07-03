@@ -154,6 +154,18 @@ private Set<TcpFlag> flags;   // SYN+ACK → 0x12;读 0x12 → EnumSet.of(SYN,AC
 private List<Object> options;   // type=1→SubnetMask, type=3→Router, type=0xFF→End
 ```
 
+### Phase 2c2(本版本新增)
+
+- **元素内 sentinel** —— LIST 的第三种终止方式:`sentinelOn="length", sentinelValue=0`。引擎 peek 元素首字段值,==sentinelValue 则停。解锁真实 DNS QName(length=0 表示结束)。
+
+示例:
+
+```java
+@ProtocolField(type=FieldType.LIST, elementClass=DnsLabel.class,
+    sentinelOn="length", sentinelValue=0)
+private List<DnsLabel> labels;   // 读 label,length=0 → 结束(真实 DNS QName)
+```
+
 ### Phase 3(本版本新增)
 
 - **校验和钩子** —— 实体实现 `Checksum` 接口 + `@ChecksumField` 标记,序列化时引擎自动置0→算→回写。试金石:IPv4 头校验和(16位反码求和),parity 对照 pcap4j(整头字节一致)。
@@ -193,7 +205,6 @@ public class TcpSegmentWithChecksum implements Checksum {
 - CRC16(Modbus 等)
 - 校验和反序列化端验证(结果存实体)
 - 非标准 TLV 元素结构(如 TCP Options 的 NOP 无 length、固定长度)
-- 元素内字段级 sentinel(如 DNS 的「label 长度=0 表示结束」)
 - 未知 TLV type 零丢失(RawOption 占位)
 - 复杂条件(位掩码 / `&&`)
 - 流重组 / 分片重组(过程性,留钩子)
@@ -207,6 +218,7 @@ public class TcpSegmentWithChecksum implements Checksum {
   - Phase 2d:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2d-design.md`
   - Phase 2e:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2e-design.md`
   - Phase 2c1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c1-design.md`
+  - Phase 2c2:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c2-design.md`
   - Phase 3:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3-design.md`
   - Phase 3a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3a-design.md`
 - 实施计划:
@@ -216,5 +228,6 @@ public class TcpSegmentWithChecksum implements Checksum {
   - Phase 2d:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2d.md`
   - Phase 2e:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2e.md`
   - Phase 2c1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c1.md`
+  - Phase 2c2:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c2.md`
   - Phase 3:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3.md`
   - Phase 3a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3a.md`

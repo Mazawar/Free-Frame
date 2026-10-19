@@ -72,6 +72,7 @@ export interface HexRow {
 
 export function hexRows(p: Packet): HexRow[] {
   const bytes = p.hex.length / 2
+  const hexUpper = p.hex.toUpperCase()
   const spans = p.layers.map((l, i) => ({
     start: l.offset, end: l.offset + Math.max(1, l.headerLen), color: layerColor(i),
   }))
@@ -80,7 +81,7 @@ export function hexRows(p: Packet): HexRow[] {
     const cells: HexRow['cells'] = []
     for (let i = 0; i < 16 && base + i < bytes; i++) {
       const idx = base + i
-      const hexByte = p.hex.substr(idx * 2, 2)
+      const hexByte = hexUpper.substr(idx * 2, 2)
       const code = parseInt(hexByte, 16)
       const span = spans.find(s => idx >= s.start && idx < s.end)
       cells.push({
@@ -92,6 +93,51 @@ export function hexRows(p: Packet): HexRow[] {
     rows.push({ offset: base, cells })
   }
   return rows
+}
+
+/** 层摘要行(Wireshark 风格):Ethernet II, Src: …, Dst: … */
+export function layerSummary(l: { id: string; name: string; fields: Record<string, unknown> }): string {
+  const f = l.fields
+  switch (l.id) {
+    case 'ethernet':
+      return `Ethernet II, Src: ${f.srcMac ?? '?'}, Dst: ${f.dstMac ?? '?'}`
+    case 'ipv4':
+      return `Internet Protocol Version 4, Src: ${f.sourceIp ?? '?'}, Dst: ${f.destinationIp ?? '?'}`
+    case 'ipv6':
+      return `Internet Protocol Version 6, Src: ${f.sourceIp ?? '?'}, Dst: ${f.destinationIp ?? '?'}`
+    case 'udp':
+      return `User Datagram Protocol, Src Port: ${f.srcPort ?? '?'}, Dst Port: ${f.dstPort ?? '?'}`
+    case 'tcp':
+      return `Transmission Control Protocol, Src Port: ${f.srcPort ?? '?'}, Dst Port: ${f.dstPort ?? '?'}`
+    case 'arp':
+      return `Address Resolution Protocol (${Number(f.operation) === 1 ? 'request' : 'reply'})`
+    case 'icmp':
+      return `Internet Control Message Protocol (type ${f.type ?? '?'})`
+    default:
+      return l.name
+  }
+}
+
+/** 剪贴板(localhost 为安全上下文,clipboard API 可用;失败退回 execCommand)。 */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      return ok
+    } catch {
+      return false
+    }
+  }
 }
 
 export function fmtValue(v: unknown): string {

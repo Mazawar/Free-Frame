@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import { computed, h, nextTick, ref, watch } from 'vue'
-import { NTag, NTree } from 'naive-ui'
-import { X } from 'lucide-vue-next'
+import { NButton, NTag, NTree, useMessage } from 'naive-ui'
+import { Check, Copy, X } from 'lucide-vue-next'
 import { closeDetail, store } from '../store'
-import { fmtValue, layerColor } from '../utils/format'
+import { copyText, fmtValue, layerColor, layerSummary } from '../utils/format'
 import HexView from './HexView.vue'
-import type { Packet } from '../types'
 
+const message = useMessage()
 const packet = computed(() => store.selected)
 const paneRef = ref<HTMLElement | null>(null)
 
 const selectedKeys = ref<string[]>([])
 const expandedKeys = ref<string[]>([])
 const highlight = ref<[number, number] | null>(null)
+const copiedKey = ref('')
 
-// ---- 嵌套树:层 i 是层 i-1 的最后一个子节点(Wireshark 式父子结构) ----
+// ---- Wireshark 式层列表:每层一个顶层节点,子节点为字段 ----
 
 interface Meta {
   kind: 'layer' | 'field'
@@ -32,25 +33,15 @@ function shortValue(v: unknown): string {
 const treeData = computed(() => {
   const p = packet.value
   if (!p) return []
-  const roots: any[] = []
-  let prev: any = null
-  p.layers.forEach((l, i) => {
-    const children: any[] = Object.entries(l.fields).map(([k, v]) => ({
+  return p.layers.map((l, i) => ({
+    key: `L${i}`,
+    meta: { kind: 'layer', layerIndex: i } satisfies Meta,
+    children: Object.entries(l.fields).map(([k, v]) => ({
       key: `L${i}:${k}`,
       meta: { kind: 'field', layerIndex: i, fieldName: k, value: v } satisfies Meta,
-    }))
-    // payload 类长值占位文本
-    const node: any = {
-      key: `L${i}`,
-      meta: { kind: 'layer', layerIndex: i } satisfies Meta,
-      children,
-      isLeaf: false,
-    }
-    if (prev) prev.children.push(node)
-    else roots.push(node)
-    prev = node
-  })
-  return roots
+    })),
+    isLeaf: false,
+  }))
 })
 
 function renderLabel({ option }: { option: any }) {
@@ -59,14 +50,49 @@ function renderLabel({ option }: { option: any }) {
     const l = packet.value!.layers[meta.layerIndex]!
     return h('span', { class: 'layer-row' }, [
       h('span', { class: 'swatch', style: { background: layerColor(meta.layerIndex) } }),
-      h('span', { class: 'lname' }, l.name),
+      h('span', { class: 'lsummary' }, layerSummary(l)),
       h('span', { class: 'loff mono' }, `@${l.offset} · ${l.headerLen} B`),
     ])
   }
+  const name = meta.fieldName ?? ''
   return h('span', { class: 'field-row' }, [
-    h('span', { class: 'fname' }, meta.fieldName ?? ''),
+    h('span', { class: 'fname' }, name),
     h('span', { class: 'fvalue num', title: fmtValue(meta.value) }, shortValue(meta.value)),
+    h('button', {
+      class: 'copy-btn',
+      title: '复制值',
+      onClick: (e: MouseEvent) => copyField(e, option.key as string, name, meta.value),
+    }, [h(copiedKey.value === option.key ? Check : Copy, { size: 11 })]),
   ])
+}
+
+// ---- 复制 ----
+
+async function copyField(e: MouseEvent, key: string, name: string, v: unknown) {
+  e.stopPropagation()
+  if (await copyText(fmtValue(v))) {
+    copiedKey.value = key
+    message.success(`已复制 ${name}`)
+    setTimeout(() => (copiedKey.value = ''), 1500)
+  } else {
+    message.error('复制失败')
+  }
+}
+
+async function copyHex(all: boolean) {
+  const p = packet.value!
+  let text: string
+  if (all || !highlight.value) {
+    text = p.hex.toUpperCase()
+  } else {
+    const [s, e] = highlight.value
+    text = p.hex.slice(s * 2, e * 2).toUpperCase()
+  }
+  if (await copyText(text)) {
+    message.success(all ? `已复制整帧 Hex(${p.len} B)` : `已复制选中字段 Hex`)
+  } else {
+    message.error('复制失败')
+  }
 }
 
 // ---- 字段 ↔ 字节 双向联动 ----
@@ -162,7 +188,9 @@ watch(packet, p => {
             <span class="swatch" :style="{ background: layerColor(i) }"></span>
             {{ l.id }} @{{ l.offset }}-{{ l.offset + l.headerLen }}
           </span>
-          <span class="lg tip">点字段或点字节互相定位</span>
+          <span class="flex1"></span>
+          <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
+          <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
         </div>
         <HexView :packet="packet" :highlight="highlight" @byte-click="onByteClick" />
       </div>
@@ -172,7 +200,7 @@ watch(packet, p => {
 
 <style scoped>
 .pane {
-  height: 320px; flex-shrink: 0;
+  height: 336px; flex-shrink: 0;
   display: flex; flex-direction: column;
   border-top: 1px solid #21262d;
   background: #0f141a;
@@ -198,21 +226,41 @@ watch(packet, p => {
 .hex-side { flex: 1.25; min-width: 0; display: flex; flex-direction: column; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 6px; align-items: center; }
 .lg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #8b949e; }
-.lg.tip { color: #484f58; margin-left: auto; }
-.swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.flex1 { flex: 1; }
 
 /* 树节点内容 */
-:deep(.layer-row) { display: inline-flex; align-items: center; gap: 7px; }
-:deep(.lname) { font-weight: 600; color: #e6edf3; font-size: 12px; }
-:deep(.loff) { color: #6e7681; font-size: 11px; }
-:deep(.field-row) { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; }
+:deep(.layer-row) { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+:deep(.swatch) { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
+:deep(.lsummary) {
+  font-size: 12px; color: #e6edf3; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+:deep(.loff) { color: #6e7681; font-size: 11px; flex-shrink: 0; }
+:deep(.field-row) { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 :deep(.fname) { color: #8b949e; font-size: 12px; }
 :deep(.fvalue) {
   color: #c9d1d9; font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   max-width: 260px;
 }
+:deep(.copy-btn) {
+  opacity: 0; display: inline-flex; align-items: center;
+  background: none; border: none; cursor: pointer;
+  color: #6e7681; padding: 2px; border-radius: 3px; flex-shrink: 0;
+  transition: opacity .12s;
+}
+:deep(.n-tree-node:hover .copy-btn),
+:deep(.copy-btn:hover) { opacity: 1; }
+:deep(.copy-btn:hover) { color: #c9d1d9; background: rgba(177, 186, 196, .14); }
+:deep(.copy-btn.ok) { color: #57ab5a; }
+
+/* 选中效果:左侧强调条 + 提亮 */
+:deep(.n-tree-node--selected > .n-tree-node-content) {
+  background: rgba(83, 155, 245, .15) !important;
+  box-shadow: inset 2px 0 0 #539bf5;
+}
 :deep(.n-tree-node--selected .fname),
-:deep(.n-tree-node--selected .fvalue) { color: #fff; }
+:deep(.n-tree-node--selected .fvalue),
+:deep(.n-tree-node--selected .lsummary) { color: #fff; }
 :deep(.n-tree-node-indent) { width: 12px !important; }
 </style>

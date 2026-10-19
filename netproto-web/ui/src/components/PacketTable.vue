@@ -82,7 +82,12 @@ watch(() => rows.value.length, () => {
 
 <style scoped>
 :deep(.n-data-table-tr) { height: 26px; }
-:deep(.n-data-table-tr.sel .n-data-table-td) { background: #16233a !important; }
+:deep(.n-data-table-tr.sel .n-data-table-td) {
+  background: #1e3a5f !important;
+}
+:deep(.n-data-table-tr.sel .n-data-table-td:first-child) {
+  box-shadow: inset 2px 0 0 #539bf5;
+}
 :deep(td .dim) { color: #8b949e; }
 :deep(td .info) { color: #c9d1d9; }
 :deep(.mono) { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }

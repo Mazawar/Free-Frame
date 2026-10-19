@@ -37,6 +37,8 @@ const themeOverrides: GlobalThemeOverrides = {
     textColor2: '#c9d1d9',
     textColor3: '#8b949e',
     placeholderColor: '#6e7681',
+    colorScrollbar: '#2d333b',
+    colorScrollbarHover: '#444c56',
     borderRadius: '4px',
     borderRadiusSmall: '3px',
     fontSize: '13px',
@@ -65,10 +67,11 @@ const themeOverrides: GlobalThemeOverrides = {
 onMounted(async () => {
   connectStream()
   await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
-  if (store.captureRunning) {
+  // 无论是否在采集,都恢复环形缓冲里的最近帧(停止/刷新后不丢上下文)
+  try {
     const recent = await api.packets(200)
     recent.reverse().forEach(addPacket)
-  }
+  } catch { /* 服务未起 */ }
 })
 </script>
 

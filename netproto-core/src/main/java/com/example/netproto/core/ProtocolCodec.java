@@ -68,8 +68,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             }
             // LIST 校验
             if (fi.elementClass != void.class) {
-                // count 驱动校验:sentinel/sentinelOn 驱动的 LIST 不需要 countField(互斥)
-                if (fi.sentinel < 0 && fi.sentinelOn.isEmpty()) {
+                // count 驱动校验:sentinel/sentinelOn/untilEnd 驱动的 LIST 不需要 countField(互斥)
+                if (fi.sentinel < 0 && fi.sentinelOn.isEmpty() && !fi.untilEnd) {
                     if (fi.countField.isEmpty()) {
                         throw new IllegalArgumentException(
                                 "LIST field '" + fi.name + "' missing countField");

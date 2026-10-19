@@ -38,14 +38,42 @@ public final class StackEncoder {
         for (int i = layers.size() - 2; i >= 0; i--) {
             Object layer = layers.get(i);
             Object child = layers.get(i + 1);
-            setPayload(layer, bytes);
-            if (layer instanceof PayloadAware aware) {
-                aware.onPayload(bytes);
-            }
-            autoWire(layer, child.getClass());
-            bytes = codecOf(layer.getClass()).encode(layer);
+            bytes = wrap(layer, child.getClass(), bytes);
         }
         return bytes;
+    }
+
+    /**
+     * 包装一层:payload 注入 → 长度钩子 → 选择子自动接线 → 编码本层。
+     * <p>
+     * 有 @Payload 字段:内层字节注入字段后整体编码(长度/校验和可覆盖全帧,如 UDP/IP)。
+     * 无 @Payload 字段:公共头型中间层(分派树继续下降),只编码本层固定字段,
+     * 内层字节直接拼接 —— 与解码侧「headerBytes 后交子协议」完全对称。
+     */
+    private byte[] wrap(Object layer, Class<?> childType, byte[] innerBytes) {
+        Field payloadField = findPayloadField(layer.getClass());
+        if (payloadField != null) {
+            try {
+                payloadField.setAccessible(true);
+                payloadField.set(layer, innerBytes);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(
+                        "cannot set payload of " + layer.getClass().getName(), e);
+            }
+        }
+        if (layer instanceof PayloadAware aware) {
+            aware.onPayload(innerBytes);
+        }
+        autoWire(layer, childType);
+        byte[] headBytes = codecOf(layer.getClass()).encode(layer);
+        return payloadField != null ? headBytes : concat(headBytes, innerBytes);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        byte[] out = new byte[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -54,21 +82,6 @@ public final class StackEncoder {
                 .orElseThrow(() -> new IllegalArgumentException(
                         type.getName() + " is not a registered @Protocol class"))
                 .codec();
-    }
-
-    /** 反射写入 layer 的 @Payload 字段。 */
-    private static void setPayload(Object layer, byte[] payload) {
-        Field f = findPayloadField(layer.getClass());
-        if (f == null) {
-            throw new IllegalArgumentException(
-                    layer.getClass().getName() + " has no @Payload field to accept inner layer bytes");
-        }
-        try {
-            f.setAccessible(true);
-            f.set(layer, payload);
-        } catch (IllegalAccessException e) {
-            throw new IllegalStateException("cannot set payload of " + layer.getClass().getName(), e);
-        }
     }
 
     private static Field findPayloadField(Class<?> type) {

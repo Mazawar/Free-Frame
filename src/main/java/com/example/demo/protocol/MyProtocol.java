@@ -1,13 +1,15 @@
 package com.example.demo.protocol;
 
+import com.example.demo.protocol.annotation.BindOn;
 import com.example.demo.protocol.annotation.Payload;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
 import lombok.Data;
 import lombok.ToString;
 
 /**
- * 自定义协议定义 —— 只需一个 POJO + 注解，无需手写序列化。
+ * 自定义协议定义 —— 只需一个 POJO + 注解,无需手写序列化。
+ * 通过 @BindOn 挂到 UDP 9999 端口,自动加入自顶向下分派树。
  * <p>
  * 报文结构：
  *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -20,7 +22,8 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 9999)
+@Protocol(id = "my-app", name = "My App Protocol")
+@BindOn(parent = "udp", when = "dstPort == 9999 || srcPort == 9999")
 public class MyProtocol {
 
     @ProtocolField(order = 1, size = 8)

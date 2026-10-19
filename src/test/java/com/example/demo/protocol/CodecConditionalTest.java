@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.ProtocolCodec;
 import lombok.Data;
 import org.junit.jupiter.api.Test;
@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CodecConditionalTest {
 
     @Data
-    @ProtocolPacket(port = 7005)
+    @Protocol(id = "port-7005")
     public static class CondPacket {
         @ProtocolField(order = 1, size = 8) private int flag;
         @ProtocolField(order = 2, size = 8) private int always;

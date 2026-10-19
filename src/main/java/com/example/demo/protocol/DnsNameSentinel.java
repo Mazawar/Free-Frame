@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import lombok.Data;
 import lombok.ToString;
@@ -17,7 +17,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "dns-name-sentinel")
 public class DnsNameSentinel {
 
     @ProtocolField(order = 1, type = FieldType.LIST,

@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import com.example.demo.protocol.core.ProtocolCodec;
 import lombok.Data;
@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CodecBitFieldTest {
 
     @Data
-    @ProtocolPacket(port = 7001)
+    @Protocol(id = "port-7001")
     public static class BitFields {
         @ProtocolField(order = 1, size = 4)  private int version;
         @ProtocolField(order = 2, size = 4)  private int ihl;
@@ -45,7 +45,7 @@ class CodecBitFieldTest {
     }
 
     @Data
-    @ProtocolPacket(port = 7002)
+    @Protocol(id = "port-7002")
     public static class Outer {
         @ProtocolField(order = 1, size = 8)  private int mark;
         @ProtocolField(order = 2, type = FieldType.NESTED) private BitFields inner;

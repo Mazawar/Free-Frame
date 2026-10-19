@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import lombok.Data;
 import lombok.ToString;
@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "ethernet-frame-sample")
 public class EthernetFrame {
 
     @ProtocolField(order = 1, size = 48) private long dstMac;     // 6 字节当 long

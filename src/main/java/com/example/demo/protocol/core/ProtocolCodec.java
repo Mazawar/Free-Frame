@@ -8,11 +8,16 @@ import java.lang.reflect.Field;
 import java.nio.charset.Charset;
 import java.util.*;
 
-public final class ProtocolCodec<T> {
+public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     private final Class<T> clazz;
     private final List<FieldInfo> fixedFields; // 按 order 排序
     private final FieldInfo payloadField;      // @Payload 字段(向后兼容)
+
+    /** 最近一次 deserialize 的头部(固定字段)位宽;headerBytes() 用。分派线程内单线程使用。 */
+    private int lastHeaderBits;
+    /** 当前 deserialize 的层边界(相对游标 baseByte 的位偏移),untilEnd 循环用。 */
+    private int layerEndBits;
 
     public ProtocolCodec(Class<T> clazz) {
         this.clazz = clazz;
@@ -80,12 +85,12 @@ public final class ProtocolCodec<T> {
                                         + "' which is not earlier in order (forward ref forbidden)");
                     }
                 }
-                // elementClass + 边界校验:count 与 sentinel 驱动都适用
-                if (!fi.elementClass.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
-                    throw new IllegalArgumentException(
-                            "LIST field '" + fi.name + "' elementClass " + fi.elementClass.getName()
-                                    + " is not a @ProtocolPacket entity");
-                }
+            // elementClass + 边界校验:count 与 sentinel 驱动都适用
+            if (!fi.elementClass.isAnnotationPresent(com.example.demo.protocol.annotation.Protocol.class)) {
+                throw new IllegalArgumentException(
+                        "LIST field '" + fi.name + "' elementClass " + fi.elementClass.getName()
+                                + " is not a @Protocol entity");
+            }
                 validateElementBoundary(fi.elementClass);
             }
             // sentinel 校验(Phase 2b)
@@ -112,6 +117,40 @@ public final class ProtocolCodec<T> {
                 if (fi.sentinel >= 0) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': sentinelOn and sentinel are mutually exclusive");
+                }
+            }
+            // custom(L2 逃生舱)校验:接管字段的一切尺寸来源,禁止与声明式尺寸混用
+            if (fi.custom != null) {
+                if (fi.size > 0) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': custom and size are mutually exclusive");
+                }
+                if (!fi.lengthField.isEmpty() || !fi.countField.isEmpty()
+                        || fi.sentinel >= 0 || !fi.sentinelOn.isEmpty() || fi.untilEnd) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': custom is mutually exclusive with"
+                                    + " lengthField/countField/sentinel/sentinelOn/untilEnd");
+                }
+            }
+            // untilEnd(循环·耗尽驱动)校验
+            if (fi.untilEnd) {
+                if (!fi.countField.isEmpty() || fi.sentinel >= 0 || !fi.sentinelOn.isEmpty()
+                        || !fi.lengthField.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': untilEnd is mutually exclusive with"
+                                    + " countField/sentinel/sentinelOn/lengthField");
+                }
+                if (fi.elementClass == void.class) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': untilEnd requires elementClass");
+                }
+                for (java.lang.reflect.Field ef : fi.elementClass.getDeclaredFields()) {
+                    if (ef.isAnnotationPresent(Payload.class)) {
+                        throw new IllegalArgumentException(
+                                "field '" + fi.name + "': untilEnd element "
+                                        + fi.elementClass.getName() + " must not have a @Payload field"
+                                        + " (element must be self-bounded)");
+                    }
                 }
             }
         }
@@ -156,21 +195,30 @@ public final class ProtocolCodec<T> {
             T obj = clazz.getDeclaredConstructor().newInstance();
             FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
             BitCursor cursor = new BitCursor(rawData, offset);
+            this.layerEndBits = length * 8;
 
             for (FieldInfo fi : fixedFields) {
-                if (!evalPresentIf(fi.presentIf, ctx)) {
+                if (!evalPresentIf(fi, ctx)) {
                     continue; // 条件不满足:不读字节、不入 ctx
                 }
-                // 反序列化路径:尚未读取嵌套对象值,无法序列化取尺寸。
-                // 对变长 NESTED 字段(最后一个字段)用「吃掉剩余字节」,
-                // 故把剩余位数传给 resolveSize(其余路径忽略此值)。
-                int remainingBits = length * 8 - cursor.bitOffset();
-                long size = resolveSize(fi, obj, ctx, true, remainingBits);
-                Object value = readValue(fi, cursor, (int) size, ctx);
+                Object value;
+                if (fi.custom != null) {
+                    // L2 逃生舱:自定义编解码器全权接管该字段(自行推进游标)
+                    int remainingBytes = Math.max(0, (length * 8 - cursor.bitOffset()) / 8);
+                    value = fi.custom.read(cursor, ctx, remainingBytes);
+                } else {
+                    // 反序列化路径:尚未读取嵌套对象值,无法序列化取尺寸。
+                    // 对变长 NESTED 字段(最后一个字段)用「吃掉剩余字节」,
+                    // 故把剩余位数传给 resolveSize(其余路径忽略此值)。
+                    int remainingBits = length * 8 - cursor.bitOffset();
+                    long size = resolveSize(fi, obj, ctx, true, remainingBits);
+                    value = readValue(fi, cursor, (int) size, ctx);
+                }
                 fi.field.setAccessible(true);
                 fi.field.set(obj, value);
                 ctx.put(fi.name, value);
             }
+            this.lastHeaderBits = cursor.bitOffset();
 
             // 向后兼容:@Payload 取剩余字节
             if (payloadField != null) {
@@ -199,7 +247,12 @@ public final class ProtocolCodec<T> {
             // 第一遍:算总位数
             int totalBits = 0;
             for (FieldInfo fi : fixedFields) {
-                if (!evalPresentIf(fi.presentIf, ctx)) {
+                if (!evalPresentIf(fi, ctx)) {
+                    continue;
+                }
+                if (fi.custom != null) {
+                    fi.field.setAccessible(true);
+                    totalBits += fi.custom.sizeOf(fi.field.get(obj));
                     continue;
                 }
                 long size = resolveSize(fi, obj, ctx, false, 0);
@@ -221,7 +274,12 @@ public final class ProtocolCodec<T> {
             // 记录校验和字段的偏移(field → 起始字节偏移),供第三步回写
             java.util.Map<String, Integer> checksumOffsets = new java.util.HashMap<>();
             for (FieldInfo fi : fixedFields) {
-                if (!evalPresentIf(fi.presentIf, ctx)) {
+                if (!evalPresentIf(fi, ctx)) {
+                    continue;
+                }
+                if (fi.custom != null) {
+                    fi.field.setAccessible(true);
+                    fi.custom.write(cursor, ctx, fi.field.get(obj));
                     continue;
                 }
                 long size = resolveSize(fi, obj, ctx, false, 0);
@@ -272,21 +330,28 @@ public final class ProtocolCodec<T> {
         }
     }
 
-    /** 求值 presentIf 表达式 "field==value",支持十进制/十六进制(0x..) 字面量。 */
-    private static boolean evalPresentIf(String expr, FieldContext ctx) {
-        if (expr == null || expr.isBlank()) {
+    /** 求值 presentIf(预编译 AST,严格模式:未知/未读字段抛 IllegalArgumentException)。 */
+    private static boolean evalPresentIf(FieldInfo fi, FieldContext ctx) {
+        if (fi.presentIfNode == null) {
             return true;
         }
-        int eq = expr.indexOf("==");
-        if (eq < 0) {
-            throw new IllegalArgumentException("presentIf must be 'field==value': " + expr);
+        try {
+            return fi.presentIfNode.eval(name -> resolveCtxLong(ctx, name)) != 0;
+        } catch (Expr.UnknownIdentifier e) {
+            throw new IllegalArgumentException(
+                    "presentIf of '" + fi.name + "': " + e.getMessage(), e);
         }
-        String left = expr.substring(0, eq).trim();
-        String right = expr.substring(eq + 2).trim();
-        long expected = right.toLowerCase().startsWith("0x")
-                ? Long.parseLong(right.substring(2), 16)
-                : Long.parseLong(right);
-        return ctx.getInt(left) == expected;
+    }
+
+    private static long resolveCtxLong(FieldContext ctx, String name) {
+        if (!ctx.hasRead(name)) {
+            throw new Expr.UnknownIdentifier(name);
+        }
+        Object v = ctx.get(name);
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        throw new IllegalArgumentException("presentIf field not numeric: " + name);
     }
 
     // ---- 动态尺寸解析(Task 6/7 扩充 lengthField/presentIf;Task 10 扩充动态 NESTED) ----
@@ -295,9 +360,10 @@ public final class ProtocolCodec<T> {
         if (effectiveType(fi) == FieldType.LIST_TLV) {
             return tlvTotalBits(fi, obj);
         }
-        // -1. sentinel:数据位数 + 8(标记字节)
+        // -1. sentinel:序列化路径按当前值算位数;反序列化路径尺寸无意义
+        //     (readSentinelValue 自行扫描标记),直接吃剩余字节。
         if (fi.sentinel >= 0) {
-            return sentinelTotalBits(fi, obj);
+            return deserialize ? remainingBits : sentinelTotalBits(fi, obj);
         }
         // 0. LIST:总位数 = 各元素 serialize 后累加
         if (effectiveType(fi) == FieldType.LIST) {
@@ -403,7 +469,11 @@ public final class ProtocolCodec<T> {
         fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
         long dataBits;
-        if (value instanceof byte[] bytes) {
+        if (value == null) {
+            dataBits = 0;  // 未赋值视为空数据(仍追加标记字节)
+        } else if (value instanceof String s) {
+            dataBits = s.getBytes(Charset.forName(fi.charset)).length * 8L;
+        } else if (value instanceof byte[] bytes) {
             dataBits = bytes.length * 8L;
         } else if (value instanceof java.util.List<?> list) {
             ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
@@ -492,6 +562,23 @@ public final class ProtocolCodec<T> {
                         list.add(elem);
                         cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
                     }
+                } else if (fi.untilEnd) {
+                    // 耗尽驱动:读到本层缓冲区末尾为止(元素须自定边界,注册期已校验)
+                    while (cursor.bitOffset() < layerEndBits) {
+                        int before = cursor.bitOffset();
+                        byte[] rest = cursor.remainingFromCursor();
+                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        list.add(elem);
+                        int elemBits = (int) (serializeNested(elementCodec, elem).length * 8L);
+                        if (elemBits == 0) {
+                            break;  // 防 0 字节元素死循环
+                        }
+                        cursor.skipBits(elemBits);
+                        if (before + elemBits > layerEndBits) {
+                            // 元素越过层边界(数据畸形):保留已读元素,停止循环
+                            break;
+                        }
+                    }
                 } else {
                     // count 驱动(Phase 2a 原逻辑)
                     int count = ctx.getInt(fi.countField);
@@ -562,7 +649,7 @@ public final class ProtocolCodec<T> {
             }
             return list;
         } else {
-            // BYTES:逐字节读
+            // BYTES/String:逐字节读到标记
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
             while (true) {
                 int peek = cursor.peekByte();
@@ -575,6 +662,9 @@ public final class ProtocolCodec<T> {
                             "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
                 }
                 bos.write((int) cursor.readBits(8));  // 读一字节(取低8位)
+            }
+            if (fi.field.getType() == String.class) {
+                return new String(bos.toByteArray(), Charset.forName(fi.charset));
             }
             return bos.toByteArray();
         }
@@ -616,12 +706,14 @@ public final class ProtocolCodec<T> {
                     }
                     cursor.writeBits(fi.sentinelValue, fi.sentinelOnSize);
                 } else {
-                    // count 驱动(Phase 2a 原逻辑)
-                    int declared = ctx.getInt(fi.countField);
-                    if (declared != list.size()) {
-                        throw new IllegalStateException(
-                                "LIST field '" + fi.name + "': countField '" + fi.countField
-                                        + "'=" + declared + " but list.size()=" + list.size());
+                    // count 驱动时校验个数一致;untilEnd/sentinel 驱动不校验
+                    if (!fi.countField.isEmpty()) {
+                        int declared = ctx.getInt(fi.countField);
+                        if (declared != list.size()) {
+                            throw new IllegalStateException(
+                                    "LIST field '" + fi.name + "': countField '" + fi.countField
+                                            + "'=" + declared + " but list.size()=" + list.size());
+                        }
                     }
                     for (Object elem : list) {
                         cursor.writeBytes(serializeNested(elementCodec, elem));
@@ -635,7 +727,11 @@ public final class ProtocolCodec<T> {
     private void writeSentinelValue(FieldInfo fi, Object obj, BitCursor cursor) throws Exception {
         fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
-        if (value instanceof byte[] bytes) {
+        if (value == null) {
+            // 空数据:仅写标记字节
+        } else if (value instanceof String s) {
+            cursor.writeBytes(s.getBytes(Charset.forName(fi.charset)));
+        } else if (value instanceof byte[] bytes) {
             cursor.writeBytes(bytes);
         } else if (value instanceof java.util.List<?> list) {
             ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
@@ -643,7 +739,7 @@ public final class ProtocolCodec<T> {
                 cursor.writeBytes(serializeNested(elementCodec, elem));
             }
         } else {
-            throw new IllegalStateException("sentinel field " + fi.name + " must be byte[] or List");
+            throw new IllegalStateException("sentinel field " + fi.name + " must be String/byte[]/List");
         }
         cursor.writeBits(fi.sentinel, 8);  // 追加标记字节
     }
@@ -684,9 +780,9 @@ public final class ProtocolCodec<T> {
         if (t == String.class) {
             return FieldType.STRING;
         }
-        // 字段类型本身是 @ProtocolPacket 实体 → 当作 NESTED(也可显式 type=NESTED)
+        // 字段类型本身是 @Protocol 实体 → 当作 NESTED(也可显式 type=NESTED)
         if (!t.isPrimitive() && !Number.class.isAssignableFrom(t)
-                && t.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
+                && t.isAnnotationPresent(com.example.demo.protocol.annotation.Protocol.class)) {
             return FieldType.NESTED;
         }
         return FieldType.INT;
@@ -843,6 +939,9 @@ public final class ProtocolCodec<T> {
         final java.util.Map<Integer,String> dispatchMap;
         final java.util.Map<String,Integer> reverseDispatchMap;
         final boolean checksumField;
+        final boolean untilEnd;
+        final FieldCodec<Object> custom;
+        final Expr.Node presentIfNode;
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -893,13 +992,30 @@ public final class ProtocolCodec<T> {
             this.dispatchMap = fwd;
             this.reverseDispatchMap = rev;
             this.checksumField = f.isAnnotationPresent(com.example.demo.protocol.annotation.ChecksumField.class);
-            // 校验:dispatch 类必须存在且是 @ProtocolPacket 实体
+            this.untilEnd = ann.untilEnd();
+            // L2 逃生舱:实例化自定义编解码器(须有无参构造)
+            if (ann.custom() != void.class) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    FieldCodec<Object> c = (FieldCodec<Object>) ann.custom().getDeclaredConstructor().newInstance();
+                    this.custom = c;
+                } catch (Exception e) {
+                    throw new IllegalArgumentException(
+                            "cannot instantiate custom codec " + ann.custom().getName()
+                                    + " for field '" + this.name + "' (needs public no-arg ctor)", e);
+                }
+            } else {
+                this.custom = null;
+            }
+            // presentIf 预编译(语法错误在 codec 构建期暴露)
+            this.presentIfNode = this.presentIf.isBlank() ? null : Expr.compile(this.presentIf);
+            // 校验:dispatch 类必须存在且是 @Protocol 实体
             Class<?> ctx = f.getDeclaringClass();
             for (String cn : fwd.values()) {
                 Class<?> c = resolveDispatchClass(cn, ctx);
-                if (!c.isAnnotationPresent(com.example.demo.protocol.annotation.ProtocolPacket.class)) {
+                if (!c.isAnnotationPresent(com.example.demo.protocol.annotation.Protocol.class)) {
                     throw new IllegalArgumentException(
-                            "dispatch class " + cn + " is not a @ProtocolPacket entity");
+                            "dispatch class " + cn + " is not a @Protocol entity");
                 }
             }
         }
@@ -933,7 +1049,27 @@ public final class ProtocolCodec<T> {
             this.dispatchMap = java.util.Collections.emptyMap();
             this.reverseDispatchMap = java.util.Collections.emptyMap();
             this.checksumField = false;
+            this.untilEnd = false;
+            this.custom = null;
+            this.presentIfNode = null;
         }
+    }
+
+    // ---- PacketCodec SPI(新架构入口,旧 deserialize/serialize 保留兼容) ----
+
+    @Override
+    public T decode(byte[] data, int offset, int length) {
+        return deserialize(data, offset, length);
+    }
+
+    @Override
+    public byte[] encode(T packet) {
+        return serialize(packet);
+    }
+
+    @Override
+    public int headerBytes() {
+        return (lastHeaderBits + 7) / 8;
     }
 
     private final class AutoPacket extends AbstractPacket {

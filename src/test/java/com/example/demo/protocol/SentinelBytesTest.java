@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import com.example.demo.protocol.core.ProtocolCodec;
 import lombok.Data;
@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SentinelBytesTest {
 
     @Data
-    @ProtocolPacket(port = 0)
+    @Protocol(id = "port-0")
     public static class CStringPacket {
         @ProtocolField(order = 1, type = FieldType.BYTES, sentinel = 0x00)
         private byte[] text;

@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import com.example.demo.protocol.core.ProtocolCodec;
 import lombok.Data;
@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CodecRegistryValidationTest {
 
     @Data
-    @ProtocolPacket(port = 7006)
+    @Protocol(id = "port-7006")
     public static class BackwardRef {
         @ProtocolField(order = 1, size = 8)
         private int len;
@@ -22,7 +22,7 @@ class CodecRegistryValidationTest {
     }
 
     @Data
-    @ProtocolPacket(port = 7007)
+    @Protocol(id = "port-7007")
     public static class NonExistentRef {
         @ProtocolField(order = 1, size = 8)
         private int len;

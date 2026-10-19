@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import com.example.demo.protocol.core.LengthUnit;
 import com.example.demo.protocol.core.ProtocolCodec;
@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CodecLengthRefTest {
 
     @Data
-    @ProtocolPacket(port = 7003)
+    @Protocol(id = "port-7003")
     public static class LengthRefPacket {
         @ProtocolField(order = 1, size = 8)  private int length;     // 后续 payload 字节数
         @ProtocolField(order = 2, type = FieldType.BYTES, lengthField = "length")
@@ -37,7 +37,7 @@ class CodecLengthRefTest {
     }
 
     @Data
-    @ProtocolPacket(port = 7004)
+    @Protocol(id = "port-7004")
     public static class BitLengthRefPacket {
         @ProtocolField(order = 1, size = 8)  private int len;        // 后续 bits 数
         @ProtocolField(order = 2, type = FieldType.STRING, lengthField = "len", lengthUnit = LengthUnit.BITS)

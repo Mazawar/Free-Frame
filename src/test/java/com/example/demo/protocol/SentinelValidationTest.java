@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.FieldType;
 import com.example.demo.protocol.core.ProtocolCodec;
 import lombok.Data;
@@ -13,7 +13,7 @@ class SentinelValidationTest {
 
     /** sentinel 与 countField 同时给 → 非法。 */
     @Data
-    @ProtocolPacket(port = 0)
+    @Protocol(id = "port-0")
     public static class BothSentinelAndCount {
         @ProtocolField(order = 1, size = 8) private int n;
         @ProtocolField(order = 2, type = FieldType.LIST,
@@ -30,7 +30,7 @@ class SentinelValidationTest {
 
     /** sentinel 与 lengthField 同时给 → 非法。 */
     @Data
-    @ProtocolPacket(port = 0)
+    @Protocol(id = "port-0")
     public static class BothSentinelAndLength {
         @ProtocolField(order = 1, size = 8) private int len;
         @ProtocolField(order = 2, type = FieldType.BYTES,
@@ -47,7 +47,7 @@ class SentinelValidationTest {
 
     /** sentinel 越界(>255)→ 非法。 */
     @Data
-    @ProtocolPacket(port = 0)
+    @Protocol(id = "port-0")
     public static class SentinelOutOfRange {
         @ProtocolField(order = 1, type = FieldType.BYTES, sentinel = 300)
         private byte[] data;

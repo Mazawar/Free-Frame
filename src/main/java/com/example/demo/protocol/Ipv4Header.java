@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.DynamicSize;
 import com.example.demo.protocol.core.FieldContext;
 import com.example.demo.protocol.core.FieldType;
@@ -15,7 +15,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "ipv4-header")
 public class Ipv4Header implements DynamicSize {
 
     @ProtocolField(order = 1, size = 4)   private int version;

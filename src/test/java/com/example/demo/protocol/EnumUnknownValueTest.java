@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.ProtocolCodec;
 import com.example.demo.protocol.core.ProtocolEnum;
 import com.example.demo.protocol.core.UnknownEnumValue;
@@ -21,7 +21,7 @@ class EnumUnknownValueTest {
     }
 
     @Data
-    @ProtocolPacket(port = 0)
+    @Protocol(id = "port-0")
     public static class Pkt {
         @ProtocolField(order = 1, size = 8, enumClass = Proto.class)
         private ProtocolEnum protocol;

@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import lombok.Data;
 import lombok.ToString;
 
@@ -15,7 +15,7 @@ import java.util.Set;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "tcp-header-flags")
 public class TcpHeaderFlags {
 
     @ProtocolField(order = 1, size = 8, flagClass = TcpFlag.class)

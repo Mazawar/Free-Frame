@@ -2,7 +2,7 @@ package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ChecksumField;
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.Checksum;
 import lombok.Data;
 import lombok.ToString;
@@ -16,7 +16,7 @@ import java.io.ByteArrayOutputStream;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "tcp-segment-cs")
 public class TcpSegmentWithChecksum implements Checksum {
 
     @ProtocolField(order = 1, size = 16) private int srcPort;

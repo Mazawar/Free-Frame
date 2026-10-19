@@ -1,7 +1,7 @@
 package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.ProtocolEnum;
 import lombok.Data;
 import lombok.ToString;
@@ -13,7 +13,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "ipv4-header-enum")
 public class Ipv4HeaderWithEnum {
 
     @ProtocolField(order = 1, size = 8, enumClass = IpProtocol.class)

@@ -2,7 +2,7 @@ package com.example.demo.protocol;
 
 import com.example.demo.protocol.annotation.ChecksumField;
 import com.example.demo.protocol.annotation.ProtocolField;
-import com.example.demo.protocol.annotation.ProtocolPacket;
+import com.example.demo.protocol.annotation.Protocol;
 import com.example.demo.protocol.core.Checksum;
 import lombok.Data;
 import lombok.ToString;
@@ -13,7 +13,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@ProtocolPacket(port = 0)
+@Protocol(id = "ipv4-header-cs")
 public class Ipv4HeaderWithChecksum implements Checksum {
 
     @ProtocolField(order = 1, size = 4)   private int version;

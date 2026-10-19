@@ -63,4 +63,12 @@ public @interface ProtocolField {
     /** 异质 TLV 分派表:type→value 实体类名,格式 {"1=SubnetMask", "3=Router"}。
      *  类名为简单名时按字段声明类所在包解析;也支持全限定名。 */
     String[] dispatch() default {};
+
+    /** LIST 循环·耗尽驱动:读到缓冲区末尾为止(元素须自定边界)。
+     *  与 countField/sentinel/sentinelOn/lengthField 互斥。 */
+    boolean untilEnd() default false;
+
+    /** 字段级逃生舱(L2):自定义编解码器(必须实现 FieldCodec 且有无参构造)。
+     *  指定后该字段的读写/尺寸完全由其接管,与 size/lengthField 互斥。 */
+    Class<?> custom() default void.class;
 }

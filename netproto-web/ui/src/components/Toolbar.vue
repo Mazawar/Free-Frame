@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NInput, NSelect, NSpace, NTag, useMessage } from 'naive-ui'
+import { NButton, NInput, NSelect, NTooltip, useMessage } from 'naive-ui'
+import { Play, Square, SendHorizontal, Trash2 } from 'lucide-vue-next'
 import { api } from '../api'
 import { clearPackets, refreshStatus, store } from '../store'
 
@@ -8,13 +9,7 @@ const message = useMessage()
 const switching = ref(false)
 
 const ifaceOptions = computed(() =>
-  store.interfaces.map(i => ({ label: (i.description || i.name).slice(0, 60), value: i.name })))
-
-const sseTag = computed(() => {
-  if (store.sse === 'open') return { type: 'success' as const, text: '推送已连接' }
-  if (store.sse === 'connecting') return { type: 'warning' as const, text: '推送重连中' }
-  return { type: 'error' as const, text: '推送已断开' }
-})
+  store.interfaces.map(i => ({ label: (i.description || i.name).slice(0, 64), value: i.name })))
 
 async function start() {
   if (!store.iface) return
@@ -22,9 +17,8 @@ async function start() {
   try {
     await api.start(store.iface, store.bpf)
     await refreshStatus()
-    message.success(`已开始采集:${store.iface}`)
   } catch (e) {
-    message.error(`启动失败:${(e as Error).message}(混杂模式通常需要管理员权限)`)
+    message.error(`启动失败:${(e as Error).message}`, { keepAliveOnHover: true, duration: 5000 })
   } finally {
     switching.value = false
   }
@@ -35,7 +29,6 @@ async function stop() {
   try {
     await api.stop()
     await refreshStatus()
-    message.success('已停止采集')
   } catch (e) {
     message.error((e as Error).message)
   } finally {
@@ -45,26 +38,66 @@ async function stop() {
 </script>
 
 <template>
-  <div class="toolbar">
-    <span class="brand">netproto<small>annotation protocol stack</small></span>
-    <n-space :size="8" align="center" :wrap="false" style="flex: 1; min-width: 0">
-      <n-select v-model:value="store.iface" :options="ifaceOptions" filterable
-                placeholder="网卡" size="small" style="width: 260px" />
-      <n-input v-model:value="store.bpf" size="small" placeholder="BPF 过滤器(可空)"
-               style="width: 200px" spellcheck="false" />
-      <n-button size="small" type="primary" :disabled="store.captureRunning || !store.iface"
-                :loading="switching" @click="start">开始采集</n-button>
-      <n-button size="small" :disabled="!store.captureRunning" @click="stop">停止</n-button>
-      <n-tag size="small" :type="store.captureRunning ? 'success' : 'default'"
-             :bordered="false">{{ store.captureRunning ? '采集中' : '空闲' }}</n-tag>
-      <n-tag size="small" :type="sseTag.type" :bordered="false">{{ sseTag.text }}</n-tag>
-      <span style="flex: 1"></span>
-      <n-button size="small" quaternary @click="store.sendOpen = true">发包</n-button>
-      <n-button size="small" quaternary @click="clearPackets">清空</n-button>
-    </n-space>
-  </div>
+  <header class="bar">
+    <div class="brand">
+      <span class="mark"></span>
+      <span class="name">netproto</span>
+    </div>
+
+    <n-select v-model:value="store.iface" :options="ifaceOptions" filterable
+              placeholder="选择网卡" size="small" class="iface" />
+    <n-input v-model:value="store.bpf" size="small" class="bpf"
+             placeholder="BPF 过滤" spellcheck="false" />
+
+    <n-button size="small" type="primary" :disabled="store.captureRunning || !store.iface"
+              :loading="switching" @click="start">
+      <template #icon><Play :size="13" /></template>
+      采集
+    </n-button>
+    <n-button size="small" :disabled="!store.captureRunning" @click="stop">
+      <template #icon><Square :size="11" /></template>
+    </n-button>
+
+    <span class="capture-state" :class="{ on: store.captureRunning }">
+      <span class="dot"></span>{{ store.captureRunning ? '采集中' : '空闲' }}
+    </span>
+
+    <span class="flex1"></span>
+
+    <n-button size="small" secondary @click="store.sendOpen = true">
+      <template #icon><SendHorizontal :size="13" /></template>
+      发包
+    </n-button>
+    <n-tooltip trigger="hover">
+      <template #trigger>
+        <n-button size="small" quaternary @click="clearPackets">
+          <template #icon><Trash2 :size="13" /></template>
+        </n-button>
+      </template>
+      清空列表
+    </n-tooltip>
+  </header>
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; width: 100%; min-width: 0; }
+.bar {
+  height: 44px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  background: #12171e;
+  border-bottom: 1px solid #21262d;
+}
+.brand { display: flex; align-items: center; gap: 7px; margin-right: 8px; user-select: none; }
+.mark { width: 8px; height: 8px; border-radius: 2px; background: #539bf5; }
+.name { font-weight: 600; font-size: 13px; letter-spacing: .2px; color: #e6edf3; }
+.iface { width: 250px; }
+.bpf { width: 170px; }
+.capture-state {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: 4px; font-size: 12px; color: #8b949e; white-space: nowrap;
+}
+.capture-state .dot { width: 6px; height: 6px; border-radius: 50%; background: #6e7681; }
+.capture-state.on { color: #57ab5a; }
+.capture-state.on .dot { background: #57ab5a; }
+.flex1 { flex: 1; }
 </style>

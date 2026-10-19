@@ -1,31 +1,19 @@
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
-body {
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 13px;
-}
-.brand {
-  font-weight: 700;
-  font-size: 16px;
-  color: #38bdf8;
-  white-space: nowrap;
-  margin-right: 12px;
-}
-.brand small { color: #94a3b8; font-size: 11px; margin-left: 6px; font-weight: normal; }
 
-.hex {
-  font-size: 12px;
-  line-height: 1.55;
-  padding: 8px 10px;
-  overflow: auto;
-  background: #0b1220;
-  border: 1px solid #33415599;
-  border-radius: 4px;
-  white-space: pre;
+body {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  background: #0d1117;
 }
-.hex-off { color: #64748b; }
-.hex-ascii { color: #64748b; }
+
+/* 数据用等宽 + 表格数字对齐 */
+.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* 详情字段表 */
 .kv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.kv-table td { padding: 3px 10px; border-top: 1px solid #26334d66; vertical-align: top; word-break: break-all; }
-.kv-table td.k { color: #38bdf8; width: 32%; }
-.empty-hint { color: #64748b; text-align: center; padding: 60px 20px; }
+.kv-table td { padding: 2px 8px 2px 0; vertical-align: top; word-break: break-all; }
+.kv-table td.k { color: #8b949e; width: 30%; min-width: 110px; }
+.kv-table td.v { color: #c9d1d9; font-variant-numeric: tabular-nums; }

@@ -1,27 +1,15 @@
 import type { Packet } from '../types'
 
-export const LAYER_COLORS = ['#38bdf8', '#a78bfa', '#4ade80', '#fbbf24', '#fb7185', '#2dd4bf']
+/** 层着色:低饱和、深底可读(GitHub Dark 语法色系)。 */
+export const LAYER_COLORS = ['#79c0ff', '#d2a8ff', '#7ee787', '#ffa657', '#ff7b72', '#56d4dd']
 
 export function layerColor(index: number): string {
   return LAYER_COLORS[index % LAYER_COLORS.length]!
 }
 
-/** 概要:优先 IP 五元组,其次 ARP,退化到协议路径。字段值已由服务端格式化(MAC/IP 可读)。 */
-export function summary(p: Packet): string {
-  const ipv4 = p.layers.find(l => l.id === 'ipv4')
-  const tp = p.layers.find(l => l.id === 'udp' || l.id === 'tcp')
-  const app = p.layers[p.layers.length - 1]
-  if (ipv4) {
-    let s = `${ipv4.fields.sourceIp ?? '?'} → ${ipv4.fields.destinationIp ?? '?'}`
-    if (tp) s += ` :${tp.fields.srcPort}→${tp.fields.dstPort}`
-    if (app && !['ethernet', 'ipv4', 'udp', 'tcp', 'icmp'].includes(app.id)) s += ` [${app.name}]`
-    return s
-  }
-  const arp = p.layers.find(l => l.id === 'arp')
-  if (arp) return `ARP ${arp.fields.operation === 1 ? 'request' : 'reply'} ${arp.fields.senderIp} → ${arp.fields.targetIp}`
-  const icmp = p.layers.find(l => l.id === 'icmp')
-  if (icmp) return `ICMP type=${icmp.fields.type} code=${icmp.fields.code}`
-  return p.path
+/** 层在帧中的色(按协议 id 稳定取色,同一协议列表/详情/hex 一致)。 */
+export function layerColorOf(packet: Packet, layerIndex: number): string {
+  return layerColor(layerIndex)
 }
 
 export function fmtTime(ts: number): string {
@@ -30,14 +18,53 @@ export function fmtTime(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
 }
 
-export function fmtValue(v: unknown): string {
-  if (v === null || v === undefined) return 'null'
-  if (Array.isArray(v)) return v.map(x => (typeof x === 'object' && x !== null ? JSON.stringify(x) : String(x))).join(', ')
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+export interface Endpoints { src: string; dst: string }
+
+/** 提取五元组的源/目的:ipv4 → arp → ethernet 兜底。 */
+export function endpoints(p: Packet): Endpoints {
+  const ip = p.layers.find(l => l.id === 'ipv4' || l.id === 'ipv6')
+  if (ip && ip.fields.sourceIp != null) {
+    return { src: String(ip.fields.sourceIp), dst: String(ip.fields.destinationIp ?? '?') }
+  }
+  const arp = p.layers.find(l => l.id === 'arp')
+  if (arp) return { src: String(arp.fields.senderIp ?? '?'), dst: String(arp.fields.targetIp ?? '?') }
+  const eth = p.layers.find(l => l.id === 'ethernet')
+  if (eth) return { src: String(eth.fields.srcMac ?? '-'), dst: String(eth.fields.dstMac ?? '-') }
+  return { src: '-', dst: '-' }
 }
 
-/** hex dump 行(16B/行),按层着色。 */
+/** 最深一层协议 id(列表"协议"列)。 */
+export function protocolOf(p: Packet): { id: string; index: number } {
+  const i = p.layers.length - 1
+  return { id: p.layers[i]?.id ?? '-', index: i }
+}
+
+/** 信息列(Wireshark 风格)。 */
+export function info(p: Packet): string {
+  const tp = p.layers.find(l => l.id === 'udp' || l.id === 'tcp')
+  const app = p.layers[p.layers.length - 1]
+  if (tp) {
+    let s = `${tp.fields.srcPort} → ${tp.fields.dstPort}`
+    if (app && !['ethernet', 'ipv4', 'udp', 'tcp', 'icmp'].includes(app.id)) s += ` [${app.name}]`
+    return s
+  }
+  const arp = p.layers.find(l => l.id === 'arp')
+  if (arp) {
+    const op = Number(arp.fields.operation)
+    return op === 1
+      ? `Who has ${arp.fields.targetIp}? Tell ${arp.fields.senderIp}`
+      : `${arp.fields.senderIp} is at ${arp.fields.senderMac}`
+  }
+  const icmp = p.layers.find(l => l.id === 'icmp')
+  if (icmp) {
+    const t = Number(icmp.fields.type)
+    if (t === 8) return 'Echo (ping) request'
+    if (t === 0) return 'Echo (ping) reply'
+    return `type=${icmp.fields.type} code=${icmp.fields.code}`
+  }
+  return p.path
+}
+
 export interface HexRow {
   offset: number
   cells: { hex: string; ascii: string; color: string | null }[]
@@ -67,6 +94,9 @@ export function hexRows(p: Packet): HexRow[] {
   return rows
 }
 
-export function fmtBytes(n: number): string {
-  return n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : `${n}`
+export function fmtValue(v: unknown): string {
+  if (v === null || v === undefined) return 'null'
+  if (Array.isArray(v)) return v.map(x => (typeof x === 'object' && x !== null ? JSON.stringify(x) : String(x))).join(', ')
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
 }

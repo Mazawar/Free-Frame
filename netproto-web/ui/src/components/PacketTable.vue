@@ -1,40 +1,56 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
-import { NDataTable, NTag, type DataTableColumns } from 'naive-ui'
+import { NDataTable, type DataTableColumns } from 'naive-ui'
 import type { Packet } from '../types'
 import { filteredNewestFirst, store } from '../store'
-import { fmtTime, layerColor, summary } from '../utils/format'
+import { endpoints, fmtTime, info, layerColor, protocolOf } from '../utils/format'
 
 const tableRef = ref<InstanceType<typeof NDataTable> | null>(null)
 
 const rows = computed(() => filteredNewestFirst.value.slice(0, 1000))
 
+function protoChip(p: Packet) {
+  const { id, index } = protocolOf(p)
+  const c = layerColor(index)
+  return h('span', {
+    style: {
+      color: c,
+      background: c + '14',
+      padding: '1px 7px',
+      borderRadius: '3px',
+      fontSize: '11px',
+      fontFamily: 'ui-monospace, Consolas, monospace',
+    },
+  }, id)
+}
+
 const columns: DataTableColumns<Packet> = [
-  { title: '#', key: 'seq', width: 70, sorter: (a, b) => a.seq - b.seq },
-  { title: '时间', key: 'ts', width: 110, render: r => fmtTime(r.ts) },
+  { title: 'No.', key: 'seq', width: 64, render: r => h('span', { class: 'num' }, String(r.seq)) },
+  { title: '时间', key: 'ts', width: 100, render: r => h('span', { class: 'num dim' }, fmtTime(r.ts)) },
   {
-    title: '协议路径', key: 'path', width: 300,
-    render: r => r.layers.map((l, i) => h(
-      NTag,
-      { size: 'small', bordered: false, style: `color:${layerColor(i)};border:1px solid ${layerColor(i)}55;background:transparent;margin-right:4px` },
-      { default: () => l.id },
-    )),
+    title: '源地址', key: 'src', width: 150,
+    render: r => h('span', { class: 'mono' }, endpoints(r).src),
   },
-  { title: '长度', key: 'len', width: 70, render: r => `${r.len} B` },
-  { title: '概要', key: 'summary', ellipsis: { tooltip: true }, render: r => summary(r) },
+  {
+    title: '目标地址', key: 'dst', width: 150,
+    render: r => h('span', { class: 'mono' }, endpoints(r).dst),
+  },
+  { title: '协议', key: 'proto', width: 96, render: protoChip },
+  { title: '长度', key: 'len', width: 60, render: r => h('span', { class: 'num dim' }, String(r.len)) },
+  {
+    title: '信息', key: 'info', ellipsis: { tooltip: true },
+    render: r => h('span', { class: 'info' }, info(r)),
+  },
 ]
 
 const rowProps = (r: Packet) => ({
-  style: 'cursor: pointer;' + (store.selected?.seq === r.seq ? 'background:#1d3461' : ''),
-  onClick: () => { store.selected = r; store.detailOpen = true },
+  style: store.selected?.seq === r.seq ? 'cursor:pointer' : 'cursor:pointer',
+  onClick: () => { store.selected = r },
 })
 
-// 跟随最新:新帧到达时滚回顶部(表为新→旧)
 watch(() => rows.value.length, () => {
-  if (store.follow) {
-    const t = tableRef.value as unknown as { scrollTo?: (o: { top: number }) => void } | null
-    t?.scrollTo?.({ top: 0 })
-  }
+  const t = tableRef.value as unknown as { scrollTo?: (o: { top: number }) => void } | null
+  t?.scrollTo?.({ top: 0 })
 })
 </script>
 
@@ -50,16 +66,27 @@ watch(() => rows.value.length, () => {
     size="small" :single-line="false"
   >
     <template #empty>
-      <div class="empty-hint">
+      <div class="empty">
         <template v-if="store.packets.length === 0">
-          等待数据 —— 选择网卡后点「开始采集」;业务协议挂在 UDP 9999 / 9998 可直接观测
+          <div class="empty-title">暂无数据</div>
+          <div class="empty-sub">选择网卡开始采集后,命中所选协议的帧将实时显示</div>
         </template>
-        <template v-else>当前过滤条件下没有帧(调整左侧协议过滤)</template>
+        <template v-else>
+          <div class="empty-title">当前过滤无匹配帧</div>
+          <div class="empty-sub">在左侧协议列表中勾选要显示的协议</div>
+        </template>
       </div>
     </template>
   </n-data-table>
 </template>
 
 <style scoped>
-:deep(.n-data-table-tr.sel) { background: #1d3461 !important; }
+:deep(.n-data-table-tr) { height: 26px; }
+:deep(.n-data-table-tr.sel .n-data-table-td) { background: #16233a !important; }
+:deep(td .dim) { color: #8b949e; }
+:deep(td .info) { color: #c9d1d9; }
+:deep(.mono) { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.empty { padding: 48px 0; color: #484f58; }
+.empty-title { font-size: 13px; color: #6e7681; margin-bottom: 4px; }
+.empty-sub { font-size: 12px; }
 </style>

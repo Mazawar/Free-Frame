@@ -1,55 +1,99 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, NMessageProvider, NGlobalStyle, darkTheme, type GlobalThemeOverrides } from 'naive-ui'
 import Toolbar from './components/Toolbar.vue'
 import ProtocolSidebar from './components/ProtocolSidebar.vue'
 import PacketTable from './components/PacketTable.vue'
-import PacketDetail from './components/PacketDetail.vue'
+import DetailPane from './components/DetailPane.vue'
 import SendDialog from './components/SendDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { api } from './api'
 import { addPacket, connectStream, refreshInterfaces, refreshProtocols, refreshStatus, store } from './store'
+
+// 克制的开发者工具配色:中性深底 + 单一强调色
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: '#539bf5',
+    primaryColorHover: '#6cb2ff',
+    primaryColorPressed: '#4284d4',
+    primaryColorSuppl: '#539bf5',
+    infoColor: '#539bf5',
+    successColor: '#57ab5a',
+    warningColor: '#c69026',
+    errorColor: '#e5534b',
+    bodyColor: '#0d1117',
+    popoverColor: '#1c2128',
+    cardColor: '#161b22',
+    modalColor: '#161b22',
+    tableColor: '#0d1117',
+    tableHeaderColor: '#12171e',
+    inputColor: '#0d1117',
+    actionColor: '#12171e',
+    hoverColor: 'rgba(177, 186, 196, 0.07)',
+    borderColor: '#2d333b',
+    dividerColor: '#21262d',
+    textColorBase: '#e6edf3',
+    textColor1: '#e6edf3',
+    textColor2: '#c9d1d9',
+    textColor3: '#8b949e',
+    placeholderColor: '#6e7681',
+    borderRadius: '4px',
+    borderRadiusSmall: '3px',
+    fontSize: '13px',
+    fontSizeMedium: '13px',
+    fontSizeSmall: '12px',
+    fontSizeTiny: '11px',
+    heightMedium: '30px',
+    heightSmall: '26px',
+  },
+  Card: { paddingMedium: '12px 16px' },
+  DataTable: {
+    thPaddingSmall: '5px 10px',
+    tdPaddingSmall: '3px 10px',
+    thColor: '#12171e',
+    tdColor: '#0d1117',
+    tdColorHover: 'rgba(177, 186, 196, 0.06)',
+    borderColor: '#1b222b',
+    fontSizeSmall: '12px',
+    thTextColor: '#8b949e',
+    thFontWeight: '500',
+  },
+  Select: { peers: { InternalSelection: { color: '#0d1117' } } },
+  Input: { color: '#0d1117' },
+}
 
 onMounted(async () => {
   connectStream()
   await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
   if (store.captureRunning) {
     const recent = await api.packets(200)
-    recent.reverse().forEach(addPacket)   // 旧→新补齐环形缓冲
+    recent.reverse().forEach(addPacket)
   }
 })
 </script>
 
 <template>
-  <n-config-provider :theme="darkTheme">
+  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
+    <n-global-style />
     <n-message-provider>
-      <div class="app-shell">
-        <header class="toolbar-bar">
-          <Toolbar />
-        </header>
-        <div class="mid">
-          <aside class="side">
-            <ProtocolSidebar />
-          </aside>
-          <main class="main">
+      <div class="app">
+        <Toolbar />
+        <div class="body">
+          <ProtocolSidebar />
+          <div class="center">
             <PacketTable />
-          </main>
+            <DetailPane v-if="store.selected" />
+          </div>
         </div>
-        <footer class="status-bar">
-          <StatusBar />
-        </footer>
+        <StatusBar />
       </div>
-      <PacketDetail />
       <SendDialog />
     </n-message-provider>
   </n-config-provider>
 </template>
 
 <style scoped>
-.app-shell { height: 100%; display: flex; flex-direction: column; }
-.mid { flex: 1; display: flex; min-height: 0; }
-.side { width: 232px; flex-shrink: 0; border-right: 1px solid rgba(51, 65, 85, .5); overflow-y: auto; padding: 10px; }
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.toolbar-bar { border-bottom: 1px solid rgba(51, 65, 85, .5); padding: 8px 12px; display: flex; }
-.status-bar { border-top: 1px solid rgba(51, 65, 85, .5); padding: 4px 12px; }
+.app { height: 100dvh; display: flex; flex-direction: column; }
+.body { flex: 1; display: flex; min-height: 0; }
+.center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 </style>

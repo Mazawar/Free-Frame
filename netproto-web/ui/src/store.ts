@@ -14,9 +14,7 @@ export const store = reactive({
   enabled: new Set<string>(),
   packets: [] as Packet[],          // 旧→新
   selected: null as Packet | null,
-  follow: true,
   sse: 'connecting' as 'connecting' | 'open' | 'closed',
-  detailOpen: false,
   sendOpen: false,
 })
 
@@ -47,7 +45,10 @@ export function addPacket(p: Packet) {
 export function clearPackets() {
   store.packets = []
   store.selected = null
-  store.detailOpen = false
+}
+
+export function closeDetail() {
+  store.selected = null
 }
 
 let es: EventSource | null = null
@@ -59,7 +60,6 @@ export function connectStream() {
   es.onopen = () => { store.sse = 'open' }
   es.addEventListener('packet', ev => { addPacket(JSON.parse((ev as MessageEvent).data as string)) })
   es.onerror = () => {
-    // EventSource 自带重连:CONNECTING=重连中, CLOSED=彻底断开(重新 new)
     if (es && es.readyState === EventSource.CLOSED) {
       store.sse = 'closed'
       setTimeout(connectStream, 2000)

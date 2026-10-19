@@ -22,17 +22,20 @@ cd ../../.. && ./mvnw -q package -DskipTests -pl netproto-demo
 
 ```
 src/
-├── main.ts / App.vue        布局(顶栏/侧栏/主表/状态栏)+ 生命周期
+├── main.ts / App.vue        布局(工具栏/侧栏/帧表/底部分析面板/状态栏)+ 主题令牌 + 生命周期
 ├── store.ts                 单一 reactive store + SSE 连接管理
 ├── api.ts                   REST 封装
 ├── types.ts                 与后端 JSON 视图对应的类型
-├── utils/format.ts          概要行/hex dump(按层着色)/时间格式化
+├── utils/format.ts          端点提取/信息列(Wireshark 风格)/hex dump(按层着色)/时间格式化
 └── components/
-    ├── Toolbar.vue          网卡/BPF/启停/推送状态/发包入口
-    ├── ProtocolSidebar.vue  协议过滤(勾选 + 命中计数 + 内置徽标)
-    ├── PacketTable.vue      虚拟滚动帧表格(新→旧,点击开详情)
-    ├── PacketDetail.vue     右侧抽屉:层级手风琴 + 字段表 + hex
-    ├── HexView.vue          hex dump(层色图例 + 高亮)
-    ├── SendDialog.vue       原始以太网注入(模板 + 校验)
-    └── StatusBar.vue        缓冲/过滤/速率/网卡
+    ├── Toolbar.vue          网卡/BPF/采集启停/状态点/发包入口(图标化)
+    ├── ProtocolSidebar.vue  协议过滤(内置栈与业务协议分组、命中计数)
+    ├── PacketTable.vue      Wireshark 式列(No./时间/源/目的/协议/长度/信息)+ 虚拟滚动
+    ├── DetailPane.vue       底部分析面板:协议树(层级字段表)/字节(hex)两个 tab
+    ├── HexView.vue          hex dump(层色高亮 + 偏移 + ASCII)
+    ├── SendDialog.vue       构造并发送(模板/校验/自动接线说明)
+    └── StatusBar.vue        缓冲/显示/速率/网卡/推送状态
 ```
+
+视觉:GitHub Dark 系配色(中性深底、单一强调色、低饱和层色)、UI 文本用系统字体栈、
+数据(时间/地址/长度/hex)用等宽 + tabular-nums,信息密度优先。

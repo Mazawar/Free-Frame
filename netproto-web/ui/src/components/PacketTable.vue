@@ -21,7 +21,7 @@ function protoChip(p: Packet) {
       fontSize: '11px',
       fontFamily: 'ui-monospace, Consolas, monospace',
     },
-  }, id)
+  }, id.toUpperCase())
 }
 
 const columns: DataTableColumns<Packet> = [

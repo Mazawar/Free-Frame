@@ -195,7 +195,7 @@ watch(packet, p => {
       <n-tag v-for="(l, i) in packet.layers" :key="l.id" size="small" :bordered="false"
              class="chip"
              :style="{ color: layerColor(i), background: layerColor(i) + '14' }">
-        {{ l.id }}
+        {{ l.id.toUpperCase() }}
       </n-tag>
       <span class="meta num">{{ packet.len }} B · {{ new Date(packet.ts).toLocaleTimeString() }}</span>
       <button class="close" title="关闭" @click="closeDetail"><X :size="14" /></button>
@@ -217,7 +217,7 @@ watch(packet, p => {
         <div class="legend">
           <span v-for="(l, i) in packet.layers" :key="l.id" class="lg">
             <span class="swatch" :style="{ background: layerColor(i) }"></span>
-            {{ l.id }} @{{ l.offset }}-{{ l.offset + l.headerLen }}
+            {{ l.id.toUpperCase() }} @{{ l.offset }}-{{ l.offset + l.headerLen }}
           </span>
           <span class="flex1"></span>
           <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>

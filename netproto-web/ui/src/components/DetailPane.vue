@@ -117,9 +117,35 @@ const rangesIndex = computed<RangeEntry[]>(() => {
   return out
 })
 
-function scrollToByte(start: number) {
+/** 把字节区间滚动到 hex 容器可视范围(居中;只滚 .hex 自身,不动外层)。 */
+function scrollToRange(start: number, end: number) {
   nextTick(() => {
-    paneRef.value?.querySelector(`[data-byte="${start}"]`)?.scrollIntoView({ block: 'nearest' })
+    const hexEl = paneRef.value?.querySelector('.hex') as HTMLElement | null
+    const first = paneRef.value?.querySelector(`[data-byte="${start}"]`)
+    const last = paneRef.value?.querySelector(`[data-byte="${Math.max(start, end - 1)}"]`)
+    if (!hexEl || !first) return
+    const hr = hexEl.getBoundingClientRect()
+    const fr = first.getBoundingClientRect()
+    const lr = (last ?? first).getBoundingClientRect()
+    const margin = 6
+    if (fr.top < hr.top + margin || lr.bottom > hr.bottom - margin) {
+      const delta = (fr.top + lr.bottom) / 2 - (hr.top + hr.height / 2)
+      hexEl.scrollTop += delta
+    }
+  })
+}
+
+/** 把选中节点滚动到树容器可视范围(点字节反查字段时用)。 */
+function scrollTreeToSelection() {
+  nextTick(() => {
+    const cont = paneRef.value?.querySelector('.tree-side') as HTMLElement | null
+    const sel = cont?.querySelector('.n-tree-node--selected')
+    if (!cont || !sel) return
+    const sr = cont.getBoundingClientRect()
+    const nr = sel.getBoundingClientRect()
+    if (nr.top < sr.top || nr.bottom > sr.bottom) {
+      cont.scrollTop += nr.top - sr.top - (sr.height - nr.height) / 2
+    }
   })
 }
 
@@ -128,7 +154,7 @@ function applySelection(key: string) {
   const r = rangesIndex.value.find(x => x.key === key)
   if (r) {
     highlight.value = [r.start, r.end]
-    scrollToByte(r.start)
+    scrollToRange(r.start, r.end)
   } else {
     highlight.value = null
   }
@@ -152,6 +178,7 @@ function onByteClick(idx: number) {
     expandedKeys.value = [...expandedKeys.value, layerKey]
   }
   applySelection(best.key)
+  scrollTreeToSelection()
 }
 
 watch(packet, p => {
@@ -178,7 +205,6 @@ watch(packet, p => {
       <div class="tree-side">
         <n-tree
           :data="treeData"
-          block-line
           :cancelable="false"
           :selected-keys="selectedKeys"
           :expanded-keys="expandedKeys"
@@ -259,13 +285,16 @@ watch(packet, p => {
 :deep(.copy-btn:hover) { color: #c9d1d9; background: rgba(177, 186, 196, .14); }
 :deep(.copy-btn.ok) { color: #57ab5a; }
 
-/* 选中效果:左侧强调条 + 提亮 */
+/* 选中效果:内容宽度内的圆角轻底 + 左侧细强调条(不做通栏色块) */
+:deep(.n-tree-node-content) { border-radius: 3px; padding-right: 8px; }
+:deep(.n-tree-node-content:hover) { background: rgba(177, 186, 196, .07); }
 :deep(.n-tree-node--selected > .n-tree-node-content) {
-  background: rgba(83, 155, 245, .15) !important;
+  background: rgba(83, 155, 245, .18) !important;
   box-shadow: inset 2px 0 0 #539bf5;
 }
 :deep(.n-tree-node--selected .fname),
 :deep(.n-tree-node--selected .fvalue),
 :deep(.n-tree-node--selected .lsummary) { color: #fff; }
+:deep(.n-tree-node--selected .copy-btn) { opacity: 1; }
 :deep(.n-tree-node-indent) { width: 12px !important; }
 </style>

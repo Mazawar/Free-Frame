@@ -111,6 +111,11 @@ public class CaptureEngine {
         }
     }
 
+    /** 注入一帧原始字节:走完整「解析 → 环形缓冲 → 订阅者推送」管线,不依赖采集运行状态。 */
+    public void inject(String iface, byte[] raw) {
+        accept(iface, raw);
+    }
+
     /** 解析一帧并广播(包内可见,测试用)。 */
     void accept(String iface, byte[] raw) {
         int seq = captured.incrementAndGet();

@@ -170,6 +170,27 @@ public class NetprotoController {
         sseKeepalive.shutdownNow();
     }
 
+    // ---- 报文注入(不经过网卡:直接进解析+展示管线) ----
+
+    /** {hex: "aa bb ..", iface?: "inject"} 注入原始字节帧,页面经 SSE 实时看到解析结果。 */
+    @PostMapping("/inject")
+    public Map<String, Object> inject(@RequestBody Map<String, String> body) {
+        String hex = body.getOrDefault("hex", "").replace(" ", "").replace("\n", "");
+        if (hex.isEmpty() || (hex.length() & 1) != 0) {
+            throw new IllegalArgumentException("hex is required (even-length hex string)");
+        }
+        byte[] raw = new byte[hex.length() / 2];
+        try {
+            for (int i = 0; i < raw.length; i++) {
+                raw[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("hex contains non-hex characters");
+        }
+        capture.inject(body.getOrDefault("iface", "inject"), raw);
+        return Map.of("status", "injected", "bytes", raw.length);
+    }
+
     // ---- 发包(原始以太网注入) ----
 
     /** {iface, layers:[{protocol:"my-app", fields:{…}}, …]} 外层→内层。byte[] 字段给 hex 字符串。 */

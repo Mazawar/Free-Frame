@@ -7,8 +7,8 @@
         <artifactId>netproto-parent</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
-    <artifactId>netproto-spring-boot</artifactId>
-    <name>netproto-spring-boot</name>
+    <artifactId>netproto-web</artifactId>
+    <name>netproto-web</name>
     <description>Spring Boot starter:自动装配(扫描 @Protocol)+ 采集引擎 + 原始发包 + REST/SSE + 内置观测页面</description>
 
     <dependencies>

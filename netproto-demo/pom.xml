@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>com.example</groupId>
-            <artifactId>netproto-spring-boot</artifactId>
+            <artifactId>netproto-web</artifactId>
         </dependency>
         <dependency>
             <groupId>com.example</groupId>

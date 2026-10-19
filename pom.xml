@@ -18,7 +18,7 @@
     <modules>
         <module>netproto-core</module>
         <module>netproto-protocols</module>
-        <module>netproto-spring-boot</module>
+        <module>netproto-web</module>
         <module>netproto-demo</module>
     </modules>
 
@@ -41,7 +41,7 @@
             </dependency>
             <dependency>
                 <groupId>com.example</groupId>
-                <artifactId>netproto-spring-boot</artifactId>
+                <artifactId>netproto-web</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

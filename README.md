@@ -127,13 +127,13 @@ netproto-parent
 │                          零依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
 ├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/ipv4/icmp/udp/tcp)
 │                          + DNS/DHCP/IP 等 17 个协议定义,依赖 core
-├── netproto-spring-boot   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
+├── netproto-web   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
 │                          + REST/SSE + 内置观测页面;protocols 为 optional(可自带协议栈)
 └── netproto-demo          演示/测试应用:全模块引入 + my-app/heartbeat 业务协议 + Spring Boot 入口
 ```
 
 按需引入示例:只做协议编解码 → `netproto-core`;要标准协议栈 → 加 `netproto-protocols`;
-要观测页面/采集/发包 → 加 `netproto-spring-boot`(不想用内置栈可 exclude `netproto-protocols`,
+要观测页面/采集/发包 → 加 `netproto-web`(不想用内置栈可 exclude `netproto-protocols`,
 配 `netproto.builtin-packages: []` 并提供自己的根协议)。
 
 ## 目录结构
@@ -141,6 +141,6 @@ netproto-parent
 ```
 netproto-core/     com.example.netproto.{annotation,core,stack}
 netproto-protocols/  com.example.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
-netproto-spring-boot/  com.example.netproto.spring.{config,capture,web} + static 观测页
+netproto-web/  com.example.netproto.spring.{config,capture,web} + static 观测页
 netproto-demo/     com.example.demo(DemoApplication + 业务协议示例)
 ```

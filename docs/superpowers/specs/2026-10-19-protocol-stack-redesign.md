@@ -266,7 +266,7 @@ SSE 断线自动重连;前端按勾选协议过滤展示。
 |---|---|---|
 | `netproto-core` | 注解 + 反射引擎 + Expr + 分派栈(Registry/Decoder/Encoder/DecodedPacket)+ VarintCodec | 仅 slf4j-api |
 | `netproto-protocols` | 内置栈(builtin)+ DNS/DHCP/IP/eth/tcp 协议定义(组包/扩展) | core |
-| `netproto-spring-boot` | 自动装配 + CaptureEngine + RawSender + REST/SSE + 观测页 | core + protocols(optional,可自带协议栈) |
+| `netproto-web` | 自动装配 + CaptureEngine + RawSender + REST/SSE + 观测页 | core + protocols(optional,可自带协议栈) |
 | `netproto-demo` | Spring Boot 演示应用 + my-app/heartbeat 业务协议 | spring-boot + protocols |
 
 要点:

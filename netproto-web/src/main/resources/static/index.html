@@ -1,68 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>netproto — 注解协议栈观测台</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>netproto · 协议栈观测台</title>
+  <script type="module" crossorigin src="/assets/index-Dfij5SRk.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-Bj3tizGx.css">
 </head>
 <body>
-<header>
-    <div class="brand">netproto<span class="sub">annotation protocol stack</span></div>
-    <div class="controls">
-        <select id="iface" title="网卡"></select>
-        <input id="bpf" placeholder="BPF 过滤器(可空)" spellcheck="false">
-        <button id="btn-start" class="primary">开始采集</button>
-        <button id="btn-stop">停止</button>
-        <span id="status" class="status idle">idle</span>
-        <span id="count" class="count">0 pkts</span>
-    </div>
-</header>
-
-<main>
-    <aside id="protocols">
-        <h3>协议 <span class="hint">只显示勾选协议命中的帧</span></h3>
-        <ul id="proto-list"></ul>
-    </aside>
-
-    <section id="packets-wrap">
-        <table id="packets">
-            <thead>
-            <tr>
-                <th>#</th><th>时间</th><th>协议路径</th><th>长度</th><th>概要</th>
-            </tr>
-            </thead>
-            <tbody id="pkt-body"></tbody>
-        </table>
-        <div id="empty" class="empty">等待数据…选择网卡后点「开始采集」。业务协议挂在 UDP 9999/9998 可直接观测。</div>
-    </section>
-
-    <section id="detail" class="hidden">
-        <div class="detail-head">
-            <h3 id="detail-title">详情</h3>
-            <button id="detail-close">×</button>
-        </div>
-        <div id="detail-layers"></div>
-        <pre id="detail-hex"></pre>
-    </section>
-</main>
-
-<footer>
-    <details id="send-panel">
-        <summary>发包(原始以太网注入 · 需管理员权限)</summary>
-        <div class="send-body">
-            <textarea id="send-json" rows="12" spellcheck="false"></textarea>
-            <div class="send-actions">
-                <select id="send-iface"></select>
-                <button id="btn-send" class="primary">注入</button>
-                <span id="send-result"></span>
-            </div>
-            <p class="hint">layers 外层→内层;选择子(etherType/protocol/端口)与长度字段自动填写。
-                byte[] 字段给 hex 字符串;Mac 字段可给 "aa:bb:cc:dd:ee:ff";Ip 字段可给点分十进制。</p>
-        </div>
-    </details>
-</footer>
-
-<script src="app.js"></script>
+  <div id="app"></div>
 </body>
 </html>

@@ -32,3 +32,4 @@ build/
 ### VS Code ###
 .vscode/
 .mimosa/
+netproto-web/ui/node_modules/

@@ -127,7 +127,15 @@ public class NetprotoController {
         return out;
     }
 
-    /** SSE 实时推送(事件名 packet,断线由前端重连)。 */
+    /** SSE 保活:定期发注释事件,防止代理/浏览器把空闲连接掐断。 */
+    private final java.util.concurrent.ScheduledExecutorService sseKeepalive =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "netproto-sse-keepalive");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发 keepalive 注释)。 */
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
         SseEmitter emitter = new SseEmitter(0L);
@@ -139,11 +147,27 @@ public class NetprotoController {
                 emitter.completeWithError(e);
             }
         };
+        java.util.concurrent.ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(() -> {
+            try {
+                emitter.send(SseEmitter.event().comment("keepalive"));
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        Runnable cleanup = () -> {
+            capture.removeListener(listener);
+            ping.cancel(false);
+        };
         capture.addListener(listener);
-        emitter.onCompletion(() -> capture.removeListener(listener));
-        emitter.onTimeout(() -> capture.removeListener(listener));
-        emitter.onError(x -> capture.removeListener(listener));
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(cleanup);
+        emitter.onError(x -> cleanup.run());
         return emitter;
+    }
+
+    @jakarta.annotation.PreDestroy
+    void shutdownKeepalive() {
+        sseKeepalive.shutdownNow();
     }
 
     // ---- 发包(原始以太网注入) ----

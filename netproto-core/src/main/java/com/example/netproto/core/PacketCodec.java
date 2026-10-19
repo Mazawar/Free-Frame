@@ -1,5 +1,8 @@
 package com.example.netproto.core;
 
+import java.util.Collections;
+import java.util.Map;
+
 /**
  * 报文级编解码契约(L3 逃生舱)。
  * <p>
@@ -19,4 +22,13 @@ public interface PacketCodec<T> {
      * 分派引擎用它确定子层起始偏移。-1 表示不支持子层分派(该层视为叶子)。
      */
     int headerBytes();
+
+    /**
+     * 最近一次 decode 各字段的位区间 [startBit, endBit)(相对本层起点,顶层字段)。
+     * 供 UI 做字段 ↔ 字节联动高亮;不支持时返回空 Map。
+     * 与 headerBytes 同理:仅解码线程内读回后立刻取走(分派为单线程)。
+     */
+    default Map<String, int[]> lastFieldRanges() {
+        return Collections.emptyMap();
+    }
 }

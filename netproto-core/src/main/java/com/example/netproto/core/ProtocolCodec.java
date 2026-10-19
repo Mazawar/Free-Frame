@@ -14,6 +14,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     /** 最近一次 deserialize 的头部(固定字段)位宽;headerBytes() 用。分派线程内单线程使用。 */
     private int lastHeaderBits;
+    /** 最近一次 deserialize 各顶层字段的位区间(相对本层起点);lastFieldRanges() 用。 */
+    private final java.util.Map<String, int[]> lastFieldRanges = new HashMap<>();
     /** 当前 deserialize 的层边界(相对游标 baseByte 的位偏移),untilEnd 循环用。 */
     private int layerEndBits;
 
@@ -196,11 +198,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
             BitCursor cursor = new BitCursor(rawData, offset);
             this.layerEndBits = length * 8;
+            this.lastFieldRanges.clear();
 
             for (FieldInfo fi : fixedFields) {
                 if (!evalPresentIf(fi, ctx)) {
                     continue; // 条件不满足:不读字节、不入 ctx
                 }
+                int startBit = cursor.bitOffset();
                 Object value;
                 if (fi.custom != null) {
                     // L2 逃生舱:自定义编解码器全权接管该字段(自行推进游标)
@@ -213,6 +217,10 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     int remainingBits = length * 8 - cursor.bitOffset();
                     long size = resolveSize(fi, obj, ctx, true, remainingBits);
                     value = readValue(fi, cursor, (int) size, ctx);
+                }
+                int endBit = cursor.bitOffset();
+                if (endBit > startBit) {
+                    this.lastFieldRanges.put(fi.name, new int[]{startBit, endBit});
                 }
                 fi.field.setAccessible(true);
                 fi.field.set(obj, value);
@@ -227,6 +235,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 if (length > consumedBytes) {
                     payloadField.field.setAccessible(true);
                     payloadField.field.set(obj, Arrays.copyOfRange(rawData, offset + consumedBytes, offset + length));
+                    this.lastFieldRanges.put(payloadField.name, new int[]{consumedBits, length * 8});
                 }
             }
             return obj;
@@ -1056,5 +1065,10 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     @Override
     public int headerBytes() {
         return (lastHeaderBits + 7) / 8;
+    }
+
+    @Override
+    public java.util.Map<String, int[]> lastFieldRanges() {
+        return java.util.Collections.unmodifiableMap(lastFieldRanges);
     }
 }

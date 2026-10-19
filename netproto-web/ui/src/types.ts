@@ -18,6 +18,8 @@ export interface LayerView {
   offset: number
   headerLen: number
   fields: Record<string, unknown>
+  /** 顶层字段的帧绝对字节区间 [start, end),供树 ↔ 字节联动高亮。 */
+  ranges: Record<string, [number, number]>
 }
 
 export interface Packet {

@@ -31,8 +31,8 @@ src/
     ├── Toolbar.vue          网卡/BPF/采集启停/状态点/发包入口(图标化)
     ├── ProtocolSidebar.vue  协议过滤(内置栈与业务协议分组、命中计数)
     ├── PacketTable.vue      Wireshark 式列(No./时间/源/目的/协议/长度/信息)+ 虚拟滚动
-    ├── DetailPane.vue       底部分析面板:协议树(层级字段表)/字节(hex)两个 tab
-    ├── HexView.vue          hex dump(层色高亮 + 偏移 + ASCII)
+    ├── DetailPane.vue       底部分析面板:左侧嵌套协议树 + 右侧字节,点字段/点字节双向联动高亮
+    ├── HexView.vue          hex dump(层色 + 选中字段高亮 + 点击回调)
     ├── SendDialog.vue       构造并发送(模板/校验/自动接线说明)
     └── StatusBar.vue        缓冲/显示/速率/网卡/推送状态
 ```

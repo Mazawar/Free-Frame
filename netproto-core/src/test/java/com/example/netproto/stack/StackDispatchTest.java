@@ -30,6 +30,14 @@ class StackDispatchTest {
         assertEquals(2, app.getType());
         assertArrayEquals(new byte[]{9, 8, 7}, app.getPayloadData());
         assertEquals("mini-app", decoded.deepestProtocol());
+
+        // 字段字节区间(联动高亮数据源):eth 头 dstMac [0,6);udp payload 覆盖内层 app
+        var ethRanges = decoded.layers().get(0).fieldRanges();
+        assertArrayEquals(new int[]{0, 6}, ethRanges.get("dstMac"));
+        var udpRanges = decoded.layers().get(2).fieldRanges();
+        assertArrayEquals(new int[]{34, 43}, udpRanges.get("payload"));   // 34=14+14+6,43=帧尾(app 头6+payload3)
+        var appRanges = decoded.layers().get(3).fieldRanges();
+        assertArrayEquals(new int[]{40, 43}, appRanges.get("payloadData"));
     }
 
     @Test

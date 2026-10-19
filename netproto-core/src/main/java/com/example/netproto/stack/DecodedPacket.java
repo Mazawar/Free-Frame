@@ -6,7 +6,8 @@ import java.util.List;
  * 一次自顶向下解码的结构化结果:原始字节 + 命中的层链。
  * <p>
  * 每层记录:协议 id/显示名/解析出的对象/在原始帧中的偏移/头部长度(payload 之前),
- * 供 UI 做 hex 高亮与层级树。未被子协议消费的剩余字节不单独记录(= raw 减去各层头部)。
+ * 以及各顶层字段的帧绝对字节区间(供 UI 做字段 ↔ 字节联动高亮)。
+ * 未被子协议消费的剩余字节不单独记录(= raw 减去各层头部)。
  */
 public final class DecodedPacket {
 
@@ -62,6 +63,14 @@ public final class DecodedPacket {
         return layers.isEmpty() ? null : layers.get(layers.size() - 1).id();
     }
 
-    /** 一层解析结果。headerLength 为该层头部(payload 之前)的字节数。 */
-    public record DecodedLayer(String id, String name, Object packet, int offset, int headerLength) {}
+    /**
+     * 一层解析结果。headerLength 为该层头部(payload 之前)的字节数;
+     * fieldRanges 为顶层字段的帧绝对字节区间 [start, end)(嵌套元素内部字段不含)。
+     */
+    public record DecodedLayer(String id, String name, Object packet, int offset, int headerLength,
+                               java.util.Map<String, int[]> fieldRanges) {
+        public DecodedLayer {
+            fieldRanges = fieldRanges == null ? java.util.Map.of() : java.util.Map.copyOf(fieldRanges);
+        }
+    }
 }

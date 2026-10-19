@@ -275,6 +275,7 @@ public class NetprotoController {
             lm.put("offset", l.offset());
             lm.put("headerLen", l.headerLength());
             lm.put("fields", LayerViews.fieldsOf(l.packet()));
+            lm.put("ranges", l.fieldRanges());
             layers.add(lm);
         }
         m.put("layers", layers);

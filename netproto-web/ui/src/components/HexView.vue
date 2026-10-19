@@ -47,9 +47,20 @@ function inHighlight(idx: number): boolean {
 }
 .hrow { display: flex; white-space: pre; }
 .off { color: #484f58; width: 44px; flex-shrink: 0; user-select: none; }
-.cells { width: 328px; flex-shrink: 0; }
-.cell { display: inline-block; width: 20px; cursor: pointer; border-radius: 2px; }
+.cells { width: 336px; flex-shrink: 0; }
+.cell {
+  display: inline-block; width: 21px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 2px;
+}
 .cell:hover { background: rgba(177, 186, 196, .14); }
-.cell.hl { background: #1f6feb; color: #fff !important; }
+.cell.hl {
+  background: #1f6feb;
+  color: #fff !important;
+  font-weight: 700;
+  border-radius: 0;
+}
 .ascii { color: #484f58; }
+.ascii .cell { width: auto; padding: 0 1px; }
 </style>

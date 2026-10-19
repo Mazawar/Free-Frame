@@ -73,13 +73,20 @@ onMounted(async () => {
     recent.reverse().forEach(addPacket)
   } catch { /* 服务未起 */ }
 })
+
+// 右键菜单只在输入框内可用(便于粘贴),其余区域禁用
+function onContextMenu(e: MouseEvent) {
+  const t = e.target as HTMLElement | null
+  if (t?.closest('input, textarea')) return
+  e.preventDefault()
+}
 </script>
 
 <template>
   <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
     <n-global-style />
     <n-message-provider>
-      <div class="app">
+      <div class="app" @contextmenu="onContextMenu">
         <Toolbar />
         <div class="body">
           <ProtocolSidebar />

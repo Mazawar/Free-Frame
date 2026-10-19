@@ -25,9 +25,14 @@ interface Meta {
 }
 
 function shortValue(v: unknown): string {
-  const s = fmtValue(v)
+  const s = maybeUpperHex(fmtValue(v))
   if (s.length > 64) return `${Math.floor(s.length / 2)} B · ${s.slice(0, 28)}…`
   return s
+}
+
+/** 纯 hex 字符串(偶数长、仅 0-9a-f)按 hex 语义显示为大写。 */
+function maybeUpperHex(s: string): string {
+  return s.length >= 8 && /^[0-9a-f]+$/.test(s) ? s.toUpperCase() : s
 }
 
 const treeData = computed(() => {
@@ -57,7 +62,7 @@ function renderLabel({ option }: { option: any }) {
   const name = meta.fieldName ?? ''
   return h('span', { class: 'field-row' }, [
     h('span', { class: 'fname' }, name),
-    h('span', { class: 'fvalue num', title: fmtValue(meta.value) }, shortValue(meta.value)),
+    h('span', { class: 'fvalue num', title: maybeUpperHex(fmtValue(meta.value)) }, shortValue(meta.value)),
     h('button', {
       class: 'copy-btn',
       title: '复制值',
@@ -70,7 +75,7 @@ function renderLabel({ option }: { option: any }) {
 
 async function copyField(e: MouseEvent, key: string, name: string, v: unknown) {
   e.stopPropagation()
-  if (await copyText(fmtValue(v))) {
+  if (await copyText(maybeUpperHex(fmtValue(v)))) {
     copiedKey.value = key
     message.success(`已复制 ${name}`)
     setTimeout(() => (copiedKey.value = ''), 1500)

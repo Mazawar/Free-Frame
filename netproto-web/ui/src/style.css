@@ -18,7 +18,10 @@ body {
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   background: #0d1117;
+  /* 工具型界面:禁用划选;输入框例外 */
+  user-select: none;
 }
+input, textarea { user-select: text; }
 
 /* 数据用等宽 + 表格数字对齐 */
 .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }

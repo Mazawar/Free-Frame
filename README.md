@@ -117,19 +117,30 @@ POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-98+ 测试:引擎全部历史用例(位级/条件/变长/LIST/TLV/sentinel/校验和/parity)+ 新增(Expr 文法、四层分派、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、校验和验证、L2 varint、L3 手写 codec、注册校验、自动装配扫描、REST 冒烟)。
+102 个测试,按模块分布:core 56(引擎+栈,内联夹具)/ protocols 38(含 pcap4j parity 对照)/ spring-boot 2(装配扫描)/ demo 6(上下文+REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST。
+
+## 模块结构(按需引入)
+
+```
+netproto-parent
+├── netproto-core          注解 + 反射编解码引擎 + Expr 小语言 + 分派栈(Registry/Decoder/Encoder)
+│                          零依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
+├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/ipv4/icmp/udp/tcp)
+│                          + DNS/DHCP/IP 等 17 个协议定义,依赖 core
+├── netproto-spring-boot   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
+│                          + REST/SSE + 内置观测页面;protocols 为 optional(可自带协议栈)
+└── netproto-demo          演示/测试应用:全模块引入 + my-app/heartbeat 业务协议 + Spring Boot 入口
+```
+
+按需引入示例:只做协议编解码 → `netproto-core`;要标准协议栈 → 加 `netproto-protocols`;
+要观测页面/采集/发包 → 加 `netproto-spring-boot`(不想用内置栈可 exclude `netproto-protocols`,
+配 `netproto.builtin-packages: []` 并提供自己的根协议)。
 
 ## 目录结构
 
 ```
-protocol/
-├── annotation/   @Protocol @BindOn @ProtocolField @Payload @ChecksumField
-├── core/         BitCursor FieldContext Expr(小语言) ProtocolCodec(反射引擎)
-│                 PacketCodec/FieldCodec SPI VarintCodec PayloadAware
-├── stack/        ProtocolRegistry(分派树) StackDecoder StackEncoder DecodedPacket
-├── builtin/      ethernet arp ipv4 icmp udp tcp(注解定义的内置栈)
-├── capture/      CaptureEngine(RawPacketListener) RawSender(原始 L2 注入)
-├── config/       NetprotoAutoConfiguration NetprotoProperties
-└── web/          NetprotoController(SSE) LayerViews(JSON 视图)
-resources/static/ index.html app.js style.css(内置观测页面)
+netproto-core/     com.example.netproto.{annotation,core,stack}
+netproto-protocols/  com.example.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
+netproto-spring-boot/  com.example.netproto.spring.{config,capture,web} + static 观测页
+netproto-demo/     com.example.demo(DemoApplication + 业务协议示例)
 ```

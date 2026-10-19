@@ -258,7 +258,25 @@ SSE 断线自动重连;前端按勾选协议过滤展示。
 
 命令约定:`./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1`,合并前全量绿。
 
-## 9. 实施顺序
+## 9. 模块化(2026-10-19 追加)
+
+单模块重组为多模块 Maven 工程,按需引入:
+
+| 模块 | 内容 | 依赖 |
+|---|---|---|
+| `netproto-core` | 注解 + 反射引擎 + Expr + 分派栈(Registry/Decoder/Encoder/DecodedPacket)+ VarintCodec | 仅 slf4j-api |
+| `netproto-protocols` | 内置栈(builtin)+ DNS/DHCP/IP/eth/tcp 协议定义(组包/扩展) | core |
+| `netproto-spring-boot` | 自动装配 + CaptureEngine + RawSender + REST/SSE + 观测页 | core + protocols(optional,可自带协议栈) |
+| `netproto-demo` | Spring Boot 演示应用 + my-app/heartbeat 业务协议 | spring-boot + protocols |
+
+要点:
+- **core 零框架依赖**:不依赖 Spring/pcap4j/Jackson;原 ProtocolCodec 的 pcap4j 适配器(toPacket/AutoPacket)删除,采集只在 spring-boot 模块用 pcap4j。
+- **内置栈可选**:`netproto.builtin-packages` 属性(默认 protocols 模块的 builtin 包),未引入模块时扫描降级为空;设空列表 + 自定义 root-protocol 可完全自带协议栈。
+- **测试随夹具分布**:引擎内联夹具测试留 core(56);pcap4j parity/DNS/DHCP 夹具测试随协议定义进 protocols(38);装配测试进 spring-boot(2);应用/REST 冒烟进 demo(6)。栈引擎测试改用 core 内联迷你栈(mini-eth/ip/udp),不再依赖 protocols。
+- 顺带加固:引擎 `newInstance` 补 `setAccessible(true)`(支持包私有协议类)。
+- 包名体系:`com.example.netproto.{annotation,core,stack}` / `com.example.netproto.protocols.*` / `com.example.netproto.spring.*` / `com.example.demo`。
+
+## 10. 实施顺序
 
 1. 注解层(Protocol/BindOn/ProtocolField 扩展)
 2. SPI(PacketCodec/FieldCodec)+ Expr

@@ -175,7 +175,7 @@ public class CaptureEngine {
                 if (s.seq() == seq) {
                     raw = s.raw();
                     iface = s.iface();
-                    ts = s.tsMillis();
+                    ts = s.ts();
                     return decoder.decode(raw, iface, ts, (int) seq);
                 }
             }

@@ -214,7 +214,7 @@ public class NetprotoController {
         for (com.netproto.spring.capture.FrameSummary s : capture.recent(limit)) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("seq", s.seq());
-            m.put("ts", s.tsMillis());
+            m.put("ts", s.ts());
             m.put("iface", s.iface());
             m.put("len", s.len());
             m.put("path", s.path());
@@ -346,7 +346,7 @@ public class NetprotoController {
         List<PcapFile.Record> records = new ArrayList<>(newest.size());
         for (int i = newest.size() - 1; i >= 0; i--) {
             com.netproto.spring.capture.FrameSummary s = newest.get(i);
-            records.add(new PcapFile.Record(s.tsMillis(), s.raw()));
+            records.add(new PcapFile.Record(s.ts(), s.raw()));
         }
         String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
         return ResponseEntity.ok()

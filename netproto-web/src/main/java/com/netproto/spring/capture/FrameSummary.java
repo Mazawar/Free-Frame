@@ -1,5 +1,7 @@
 package com.netproto.spring.capture;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.List;
 
 /**
@@ -8,10 +10,12 @@ import java.util.List;
  * <p>
  * 完整协议树不常驻:详情视图按 seq 用 {@link #raw()} 现场重解码(注解解码微秒级)。
  * src/dst/端口由 {@link PacketSummarizer} 在解码时顺手提取。
+ * 字段名即 JSON 契约(SSE 直序 record):{@code ts} 与 /packets 视图对齐;
+ * {@code raw} 不出网(详情走 /packet/{seq},导出走 Java 内部)。
  */
 public record FrameSummary(
         long seq,
-        long tsMillis,
+        long ts,
         String iface,
         int len,
         String path,
@@ -21,7 +25,7 @@ public record FrameSummary(
         Integer srcPort,
         Integer dstPort,
         String info,
-        byte[] raw) {
+        @JsonIgnore byte[] raw) {
 
     /** 表格"协议"列显示名(最深协议 id;组名映射由前端按协议元数据做)。 */
     public String protoId() {

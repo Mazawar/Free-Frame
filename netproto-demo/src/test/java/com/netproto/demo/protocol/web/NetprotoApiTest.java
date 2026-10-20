@@ -55,6 +55,6 @@ class NetprotoApiTest {
     void indexPageServed() throws Exception {
         mockMvc.perform(get("/index.html"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("netproto")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Netproto")));
     }
 }

@@ -8,7 +8,7 @@
         <version>4.1.0</version>
         <relativePath/>
     </parent>
-    <groupId>com.example</groupId>
+    <groupId>com.netproto</groupId>
     <artifactId>netproto-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -30,17 +30,17 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>com.example</groupId>
+                <groupId>com.netproto</groupId>
                 <artifactId>netproto-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.example</groupId>
+                <groupId>com.netproto</groupId>
                 <artifactId>netproto-protocols</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.example</groupId>
+                <groupId>com.netproto</groupId>
                 <artifactId>netproto-web</artifactId>
                 <version>${project.version}</version>
             </dependency>

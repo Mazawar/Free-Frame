@@ -21,8 +21,14 @@ public class NetprotoProperties {
     /** 分派树根协议 id。 */
     private String rootProtocol = "ethernet";
 
-    /** 采集环形缓冲容量。 */
-    private int ringSize = 500;
+    /** 采集环形缓冲帧数上限。默认 10 万:真正限制驻留量的是 {@link #ringBytes} 字节预算
+     *  (16MB ≈ 平均帧 500B 时约 3 万帧,大帧更少)——Wireshark 同为内存约束而非行数约束。 */
+    private int ringSize = 100_000;
+
+    /** 环形缓冲字节预算(Wireshark 捕获缓冲同思路):大帧场景下按内存淘汰最旧帧,
+     *  与 ringSize 帧数上限取先到者。yaml 支持友好写法,如 16MB / 512KB。 */
+    private org.springframework.util.unit.DataSize ringBytes =
+            org.springframework.util.unit.DataSize.ofMegabytes(16);
 
     /** 采集 snaplen。 */
     private int snaplen = 65536;
@@ -65,6 +71,14 @@ public class NetprotoProperties {
 
     public void setRingSize(int ringSize) {
         this.ringSize = ringSize;
+    }
+
+    public org.springframework.util.unit.DataSize getRingBytes() {
+        return ringBytes;
+    }
+
+    public void setRingBytes(org.springframework.util.unit.DataSize ringBytes) {
+        this.ringBytes = ringBytes;
     }
 
     public int getSnaplen() {

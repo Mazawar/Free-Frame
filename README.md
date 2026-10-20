@@ -87,7 +87,8 @@ netproto:
   enabled: true          # 总开关
   base-packages: []      # 用户协议扫描包;默认主应用包(内置栈恒注册)
   root-protocol: ethernet
-  ring-size: 500
+  ring-size: 100000      # 帧数上限(护列表规模);实际驻留由字节预算决定
+  ring-bytes: 16MB       # 内存预算:超出按最旧淘汰(Wireshark 捕获缓冲同思路)
   snaplen: 65536
 ```
 
@@ -96,7 +97,8 @@ netproto:
 ## REST / SSE API
 
 ```
-GET  /api/netproto/protocols          # 注册协议 + 字段元数据(label/group/位标志)
+GET  /api/netproto/config            # 运行配置只读视图(前端显示参数以它为准)
+GET  /api/netproto/protocols         # 注册协议 + 字段元数据(label/group/位标志)
 GET  /api/netproto/interfaces         # 网卡列表
 POST /api/netproto/capture/start      # {iface, bpf?}
 POST /api/netproto/capture/stop

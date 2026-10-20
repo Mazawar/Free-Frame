@@ -42,6 +42,16 @@ class NetprotoApiTest {
     }
 
     @Test
+    void configEndpointExposesRuntimeProperties() throws Exception {
+        mockMvc.perform(get("/api/netproto/config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rootProtocol").value("ethernet"))
+                .andExpect(jsonPath("$.ringSize").value(100000))
+                .andExpect(jsonPath("$.ringBytes").value(16 * 1024 * 1024))
+                .andExpect(jsonPath("$.snaplen").value(65536));
+    }
+
+    @Test
     void indexPageServed() throws Exception {
         mockMvc.perform(get("/index.html"))
                 .andExpect(status().isOk())

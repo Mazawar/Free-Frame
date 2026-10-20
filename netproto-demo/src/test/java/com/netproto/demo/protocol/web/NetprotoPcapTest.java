@@ -33,7 +33,8 @@ class NetprotoPcapTest {
     void exportEmptyRingIsBarePcapHeader() throws Exception {
         MvcResult r = mockMvc.perform(get("/api/netproto/export"))
                 .andExpect(status().isOk())
-                .andExpect(header().string("Content-Disposition", "attachment; filename=netproto-export.pcap"))
+                .andExpect(header().string("Content-Disposition",
+                        org.hamcrest.Matchers.matchesPattern("attachment; filename=netproto-0f-.*\\.pcap")))
                 .andReturn();
         byte[] pcap = r.getResponse().getContentAsByteArray();
         assertEquals(24, pcap.length);   // 仅全局头
@@ -85,5 +86,60 @@ class NetprotoPcapTest {
         assertEquals(1, back.size());
         assertEquals(1_234_567L, back.get(0).tsMillis());
         assertEquals(frame.length, back.get(0).raw().length);
+    }
+
+    @Test
+    void packetDetailEndpointReDecodesOnDemand() throws Exception {
+        byte[] frame = {0x33, 0x33, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0x12, 0x34, 1, 2, 3, 4};
+        byte[] pcap = PcapFile.write(List.of(new PcapFile.Record(1_700_000_000_000L, frame)));
+        mockMvc.perform(multipart("/api/netproto/import").file(
+                        new MockMultipartFile("file", "d.pcap", "application/octet-stream", pcap)))
+                .andExpect(status().isOk());
+
+        // 列表 = 轻量摘要(无协议树/hex)
+        mockMvc.perform(get("/api/netproto/packets?limit=10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].layerIds[0]").value("ethernet"))
+                .andExpect(jsonPath("$[0].src").exists())
+                .andExpect(jsonPath("$[0].info").exists())
+                .andExpect(jsonPath("$[0].layers").doesNotExist())
+                .andExpect(jsonPath("$[0].hex").doesNotExist());
+
+        // 详情 = 按需重解码的完整树 + hex
+        mockMvc.perform(get("/api/netproto/packet/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.seq").value(1))
+                .andExpect(jsonPath("$.path").value("ethernet"))
+                .andExpect(jsonPath("$.layers[0].id").value("ethernet"))
+                .andExpect(jsonPath("$.layers[0].fields.dstMac").exists())
+                .andExpect(jsonPath("$.hex").isNotEmpty());
+
+        // 已淘汰的 seq → 404
+        mockMvc.perform(get("/api/netproto/packet/9999"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void importReplacesExistingRingContents() throws Exception {
+        // 先导入 2 帧
+        byte[] frame = {0x33, 0x33, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0x12, 0x34, 1, 2};
+        byte[] two = PcapFile.write(List.of(
+                new PcapFile.Record(1000L, frame), new PcapFile.Record(2000L, frame)));
+        mockMvc.perform(multipart("/api/netproto/import").file(
+                        new MockMultipartFile("file", "a.pcap", "application/octet-stream", two)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.imported").value(2));
+
+        // 再导入 1 帧:打开文件语义,环形缓冲被替换(不是追加)
+        byte[] one = PcapFile.write(List.of(new PcapFile.Record(3000L, frame)));
+        mockMvc.perform(multipart("/api/netproto/import").file(
+                        new MockMultipartFile("file", "b.pcap", "application/octet-stream", one)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/netproto/packets?limit=100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].ts").value(3000L))
+                .andExpect(jsonPath("$[0].seq").value(1));   // 计数随重置,导入帧重新编号
     }
 }

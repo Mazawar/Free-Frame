@@ -47,14 +47,28 @@ public class NetprotoController {
     private final RawSender sender;
     private final StackEncoder encoder;
     private final ObjectMapper objectMapper;
+    private final com.netproto.spring.config.NetprotoProperties props;
 
     public NetprotoController(ProtocolRegistry registry, CaptureEngine capture, RawSender sender,
-                              StackEncoder encoder, ApplicationContext appContext) {
+                              StackEncoder encoder, ApplicationContext appContext,
+                              com.netproto.spring.config.NetprotoProperties props) {
         this.registry = registry;
         this.capture = capture;
         this.sender = sender;
         this.encoder = encoder;
+        this.props = props;
         this.objectMapper = appContext.getBeanProvider(ObjectMapper.class).getIfAvailable(ObjectMapper::new);
+    }
+
+    /** 运行配置只读视图(前端按它适配显示,如缓冲上限跟随 ring-size)。 */
+    @GetMapping("/config")
+    public Map<String, Object> config() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("rootProtocol", props.getRootProtocol());
+        m.put("ringSize", props.getRingSize());
+        m.put("ringBytes", props.getRingBytes().toBytes());
+        m.put("snaplen", props.getSnaplen());
+        return m;
     }
 
     // ---- 协议元数据 ----
@@ -197,10 +211,29 @@ public class NetprotoController {
     @GetMapping("/packets")
     public List<Map<String, Object>> packets(@RequestParam(defaultValue = "100") int limit) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (DecodedPacket p : capture.recent(limit)) {
-            out.add(toJson(p));
+        for (com.netproto.spring.capture.FrameSummary s : capture.recent(limit)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("seq", s.seq());
+            m.put("ts", s.tsMillis());
+            m.put("iface", s.iface());
+            m.put("len", s.len());
+            m.put("path", s.path());
+            m.put("layerIds", s.layerIds());
+            m.put("src", s.src());
+            m.put("dst", s.dst());
+            m.put("srcPort", s.srcPort());
+            m.put("dstPort", s.dstPort());
+            m.put("info", s.info());
+            out.add(m);
         }
         return out;
+    }
+
+    /** 单帧完整详情(树/字段/字节区间/hex):摘要不常驻解析树,按需重解码(Wireshark 点击时解析)。 */
+    @GetMapping("/packet/{seq}")
+    public ResponseEntity<Map<String, Object>> packetDetail(@PathVariable long seq) {
+        com.netproto.stack.DecodedPacket p = capture.detail(seq);
+        return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toJson(p));
     }
 
     /** SSE 保活调度:只往各连接队列投 keepalive 标记,实际发送由各连接的写线程完成。 */
@@ -216,6 +249,8 @@ public class NetprotoController {
     /**
      * SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发具名 ping 事件)。
      * <p>
+     * 推送轻量 {@link com.netproto.spring.capture.FrameSummary}(单帧约两百字节,不含协议树/hex);
+     * 详情由前端点击时经 GET /packet/{seq} 按需拉取。
      * 发送绝不跑在抓包线程上:监听器只往有界队列投递,每连接一个单写线程串行发送
      * (包 + ping 同通道,SseEmitter 并发 send 非线程安全)。队列满则丢弃本连接的
      * 新帧——冻结/慢速的浏览器只丢自己的画面,不会把背压传导回采集管线。
@@ -226,7 +261,7 @@ public class NetprotoController {
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
         SseEmitter emitter = new SseEmitter(0L);
-        BlockingQueue<Object> queue = new ArrayBlockingQueue<>(512);
+        BlockingQueue<Object> queue = new ArrayBlockingQueue<>(2048);
         var writer = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "netproto-sse-writer");
             t.setDaemon(true);
@@ -234,7 +269,7 @@ public class NetprotoController {
         });
         ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(
                 () -> queue.offer(KEEPALIVE), 15, 15, TimeUnit.SECONDS);
-        Consumer<DecodedPacket> listener = queue::offer;
+        Consumer<com.netproto.spring.capture.FrameSummary> listener = queue::offer;
         var closed = new java.util.concurrent.atomic.AtomicBoolean(false);
         Runnable cleanup = () -> {
             if (!closed.compareAndSet(false, true)) {
@@ -248,9 +283,9 @@ public class NetprotoController {
             try {
                 while (true) {
                     Object item = queue.take();
-                    if (item instanceof DecodedPacket p) {
+                    if (item instanceof com.netproto.spring.capture.FrameSummary s) {
                         emitter.send(SseEmitter.event().name("packet")
-                                .data(objectMapper.writeValueAsString(toJson(p)), MediaType.APPLICATION_JSON));
+                                .data(objectMapper.writeValueAsString(s), MediaType.APPLICATION_JSON));
                     } else {
                         emitter.send(SseEmitter.event().name("ping"));
                     }
@@ -304,27 +339,41 @@ public class NetprotoController {
 
     // ---- pcap 导出/导入(与 tcpdump/Wireshark 互通) ----
 
-    /** 导出环形缓冲(最近 ring-size 帧,旧→新)为标准 pcap,Ethernet 链路。 */
+    /** 导出环形缓冲(旧→新)为标准 pcap,Ethernet 链路;文件名带帧数。 */
     @GetMapping("/export")
     public ResponseEntity<byte[]> exportPcap() {
-        List<DecodedPacket> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
+        List<com.netproto.spring.capture.FrameSummary> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
         List<PcapFile.Record> records = new ArrayList<>(newest.size());
         for (int i = newest.size() - 1; i >= 0; i--) {
-            DecodedPacket p = newest.get(i);
-            records.add(new PcapFile.Record(p.timestampMillis(), p.raw()));
+            com.netproto.spring.capture.FrameSummary s = newest.get(i);
+            records.add(new PcapFile.Record(s.tsMillis(), s.raw()));
         }
+        String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header("Content-Disposition", "attachment; filename=netproto-export.pcap")
+                .header("Content-Disposition",
+                        "attachment; filename=netproto-" + records.size() + "f-" + ts + ".pcap")
                 .body(PcapFile.write(records));
     }
 
-    /** 导入 pcap(仅以太网链路):逐帧走「解析 → 缓冲 → SSE」管线,时间戳取文件内原始值。 */
+    /** pcap 导入大小上限:multipart 超过该值直接拒绝,防超大文件占住容器临时目录。 */
+    private static final int MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+
+    /** 导入 pcap(仅以太网链路):「打开文件」语义——先清空环形缓冲再注入,时间戳取文件内原始值。
+     *  采集运行中拒绝(seq 会与导入帧冲突)。 */
     @PostMapping("/import")
     public Map<String, Object> importPcap(@RequestParam("file") MultipartFile file) throws IOException {
+        if (capture.isRunning()) {
+            throw new IllegalArgumentException("capture is running: stop it before importing a pcap");
+        }
+        if (file.getSize() > MAX_IMPORT_BYTES) {
+            throw new IllegalArgumentException("pcap too large: " + file.getSize()
+                    + " bytes (max " + MAX_IMPORT_BYTES + ")");
+        }
         List<PcapFile.Record> records = PcapFile.read(file.getBytes());
         String source = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
                 ? "import" : file.getOriginalFilename();
+        capture.reset();
         for (PcapFile.Record r : records) {
             capture.inject(source, r.raw(), r.tsMillis());
         }

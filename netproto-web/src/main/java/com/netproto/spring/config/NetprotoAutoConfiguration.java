@@ -58,7 +58,8 @@ public class NetprotoAutoConfiguration {
 
     @Bean
     public CaptureEngine captureEngine(StackDecoder decoder, NetprotoProperties props) {
-        return new CaptureEngine(decoder, props.getRingSize(), props.getSnaplen());
+        return new CaptureEngine(decoder, props.getRingSize(),
+                (int) props.getRingBytes().toBytes(), props.getSnaplen());
     }
 
     @Bean
@@ -71,8 +72,9 @@ public class NetprotoAutoConfiguration {
                                                  CaptureEngine captureEngine,
                                                  RawSender rawSender,
                                                  StackEncoder stackEncoder,
+                                                 NetprotoProperties props,
                                                  org.springframework.context.ApplicationContext appContext) {
-        return new NetprotoController(registry, captureEngine, rawSender, stackEncoder, appContext);
+        return new NetprotoController(registry, captureEngine, rawSender, stackEncoder, appContext, props);
     }
 
     // ---- 扫描 ----

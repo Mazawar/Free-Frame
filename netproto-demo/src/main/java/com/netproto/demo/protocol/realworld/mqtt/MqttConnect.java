@@ -33,25 +33,25 @@ public class MqttConnect {
     private int level = 4;
 
     // connectFlags: D7 username D6 password D5 will-retain D4-D3 will-QoS D2 will-flag D1 reserved D0 clean-session
-    @ProtocolField(order = 4, size = 1)
+    @ProtocolField(order = 4, size = 1, group = "Connect Flags")
     private int usernameFlag;
 
-    @ProtocolField(order = 5, size = 1)
+    @ProtocolField(order = 5, size = 1, group = "Connect Flags")
     private int passwordFlag;
 
-    @ProtocolField(order = 6, size = 1)
+    @ProtocolField(order = 6, size = 1, group = "Connect Flags")
     private int willRetain;
 
-    @ProtocolField(order = 7, size = 2)
+    @ProtocolField(order = 7, size = 2, group = "Connect Flags")
     private int willQos;
 
-    @ProtocolField(order = 8, size = 1)
+    @ProtocolField(order = 8, size = 1, group = "Connect Flags")
     private int willFlag;
 
-    @ProtocolField(order = 9, size = 1)
+    @ProtocolField(order = 9, size = 1, group = "Connect Flags")
     private int reserved;
 
-    @ProtocolField(order = 10, size = 1)
+    @ProtocolField(order = 10, size = 1, group = "Connect Flags")
     private int cleanSession;
 
     @ProtocolField(order = 11, size = 16)

@@ -35,19 +35,19 @@ public class Dlt645Frame implements Checksum {
     private int start2 = 0x68;
 
     /** D7 主站(0)/从站(1)。 */
-    @ProtocolField(order = 4, size = 1)
+    @ProtocolField(order = 4, size = 1, group = "Control")
     private int dirBit;
 
     /** D6 从站异常应答标志。 */
-    @ProtocolField(order = 5, size = 1)
+    @ProtocolField(order = 5, size = 1, group = "Control")
     private int errBit;
 
     /** D5 后续帧标志。 */
-    @ProtocolField(order = 6, size = 1)
+    @ProtocolField(order = 6, size = 1, group = "Control")
     private int followBit;
 
     /** D4-D0 功能码(0x11=读数据)。 */
-    @ProtocolField(order = 7, size = 5)
+    @ProtocolField(order = 7, size = 5, group = "Control")
     private int funcCode;
 
     /** 数据域长度 L(含 DI 4 字节)。 */

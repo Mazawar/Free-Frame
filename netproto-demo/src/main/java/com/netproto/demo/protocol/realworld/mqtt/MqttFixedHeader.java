@@ -23,16 +23,16 @@ import lombok.ToString;
 public class MqttFixedHeader implements PayloadAware {
 
     /** 1=CONNECT 2=CONNACK 3=PUBLISH 8=SUBSCRIBE 9=SUBACK 13=PINGREQ。 */
-    @ProtocolField(order = 1, size = 4)
+    @ProtocolField(order = 1, size = 4, group = "Fixed Header")
     private int type;
 
-    @ProtocolField(order = 2, size = 1)
+    @ProtocolField(order = 2, size = 1, group = "Fixed Header")
     private int dup;
 
-    @ProtocolField(order = 3, size = 2)
+    @ProtocolField(order = 3, size = 2, group = "Fixed Header")
     private int qos;
 
-    @ProtocolField(order = 4, size = 1)
+    @ProtocolField(order = 4, size = 1, group = "Fixed Header")
     private int retain;
 
     /** 剩余长度(可变头+载荷),varint 1-4 字节,组装期自动。 */

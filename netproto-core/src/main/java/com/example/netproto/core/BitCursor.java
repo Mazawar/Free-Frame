@@ -112,7 +112,19 @@ public final class BitCursor {
         return data[byteIdx] & 0xFF;
     }
 
-    /** 偷看当前游标起的 size 位(不推进)。size 须 0..63。不足 size 位(到末尾)返回 -1。 */
+    /** 偷看当前游标起的 n 字节(不推进;游标须字节对齐)。不足 n 字节返回 null。多字节终结符判定用。 */
+    public byte[] peekBytes(int n) {
+        if (bitPos % 8 != 0) {
+            throw new IllegalStateException("peekBytes requires byte-aligned cursor, bitPos=" + bitPos);
+        }
+        int byteIdx = baseByte + bitPos / 8;
+        if (byteIdx + n > data.length) {
+            return null;
+        }
+        return java.util.Arrays.copyOfRange(data, byteIdx, byteIdx + n);
+    }
+
+    /** 偷看当前游标起的 size 位(不推进)。size 须 0..64。不足 size 位(到末尾)返回 -1。 */
     public long peekBits(int size) {
         if (size < 0 || size > 64) {
             throw new IllegalArgumentException("peekBits size must be 0..64, got " + size);

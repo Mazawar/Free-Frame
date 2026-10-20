@@ -33,6 +33,9 @@ public @interface ProtocolField {
     /** length 偏移:字段字节长度 = lengthField值 + lengthAdjust。默认 0(纯引用,Phase 1 行为不变)。 */
     int lengthAdjust() default 0;
 
+    /** lengthField 引用字段的值是 ASCII 十进制文本(如 LLVAR 两位 "12")时置 true。 */
+    boolean lengthAscii() default false;
+
     /** 条件字段:"field==值" 满足才出现。 */
     String presentIf() default "";
 
@@ -42,11 +45,17 @@ public @interface ProtocolField {
     /** count 驱动(LIST 用):引用元素个数字段名。 */
     String countField() default "";
 
+    /** countField 值的单位:BYTES 时元素须定长(如 Modbus byteCount,个数=字节/元素字节)。 */
+    CountUnit countUnit() default CountUnit.ELEMENTS;
+
     /** LIST 元素的实体类型(LIST 时必填)。 */
     Class<?> elementClass() default void.class;
 
     /** sentinel 结束标记字节值(0x00–0xFF);-1 表示不用。读到该字节就结束。与 countField/lengthField 互斥。 */
     int sentinel() default -1;
+
+    /** 多字节终结符(如 "\\r\\n");与 sentinel 单字节互斥,二者取一。 */
+    String sentinelStr() default "";
 
     /** LIST 元素内 sentinel:元素里哪个字段判定终止(peek 该字段值)。与 countField/sentinel 互斥。 */
     String sentinelOn() default "";

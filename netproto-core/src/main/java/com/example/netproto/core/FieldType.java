@@ -15,5 +15,9 @@ public enum FieldType {
     /** count 驱动的同质重复数组:元素是 elementClass 实体,个数由 countField 决定。 */
     LIST,
     /** 异质 TLV:每个元素 type+length+value,type 决定 value 实体类(dispatch 分派)。 */
-    LIST_TLV
+    LIST_TLV,
+    /** IEEE 754 浮点:size 32=float / 64=double。 */
+    FLOAT,
+    /** BCD 压缩十进制:每 4bit 一位十进制数字(电表/金融报文常用)。 */
+    BCD
 }

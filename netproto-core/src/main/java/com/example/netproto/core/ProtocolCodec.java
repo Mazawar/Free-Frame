@@ -70,7 +70,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             // LIST 校验
             if (fi.elementClass != void.class) {
                 // count 驱动校验:sentinel/sentinelOn/untilEnd 驱动的 LIST 不需要 countField(互斥)
-                if (fi.sentinel < 0 && fi.sentinelOn.isEmpty() && !fi.untilEnd) {
+                if (fi.sentinel < 0 && fi.sentinelBytes.length == 0
+                        && fi.sentinelOn.isEmpty() && !fi.untilEnd) {
                     if (fi.countField.isEmpty()) {
                         throw new IllegalArgumentException(
                                 "LIST field '" + fi.name + "' missing countField");
@@ -93,9 +94,18 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                 + " is not a @Protocol entity");
             }
                 validateElementBoundary(fi.elementClass);
+                // countUnit=BYTES:元素须全定长(个数 = 字节数/元素字节)
+                if (fi.countUnit == com.example.netproto.annotation.CountUnit.BYTES) {
+                    try {
+                        fixedBitSize(fi.elementClass);
+                    } catch (IllegalStateException e) {
+                        throw new IllegalArgumentException(
+                                "field '" + fi.name + "': countUnit=BYTES requires fixed-size elements", e);
+                    }
+                }
             }
-            // sentinel 校验(Phase 2b)
-            if (fi.sentinel >= 0) {
+            // sentinel 校验(Phase 2b;单/多字节终结符同规则)
+            if (fi.hasSentinel()) {
                 if (fi.sentinel > 0xFF) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "' sentinel=" + fi.sentinel + " out of range (0x00-0xFF)");
@@ -115,7 +125,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': sentinelOn and countField are mutually exclusive");
                 }
-                if (fi.sentinel >= 0) {
+                if (fi.hasSentinel()) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': sentinelOn and sentinel are mutually exclusive");
                 }
@@ -127,7 +137,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                             "field '" + fi.name + "': custom and size are mutually exclusive");
                 }
                 if (!fi.lengthField.isEmpty() || !fi.countField.isEmpty()
-                        || fi.sentinel >= 0 || !fi.sentinelOn.isEmpty() || fi.untilEnd) {
+                        || fi.hasSentinel() || !fi.sentinelOn.isEmpty() || fi.untilEnd) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': custom is mutually exclusive with"
                                     + " lengthField/countField/sentinel/sentinelOn/untilEnd");
@@ -135,7 +145,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             }
             // untilEnd(循环·耗尽驱动)校验
             if (fi.untilEnd) {
-                if (!fi.countField.isEmpty() || fi.sentinel >= 0 || !fi.sentinelOn.isEmpty()
+                if (!fi.countField.isEmpty() || fi.hasSentinel() || !fi.sentinelOn.isEmpty()
                         || !fi.lengthField.isEmpty()) {
                     throw new IllegalArgumentException(
                             "field '" + fi.name + "': untilEnd is mutually exclusive with"
@@ -153,6 +163,19 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                         + " (element must be self-bounded)");
                     }
                 }
+            }
+            // FLOAT/BCD 类型校验(validateReferences 为 static,此处内联类型判定)
+            Class<?> ft = fi.field.getType();
+            boolean isFloat = fi.type == FieldType.FLOAT
+                    || ft == float.class || ft == Float.class
+                    || ft == double.class || ft == Double.class;
+            if (isFloat && fi.size != 32 && fi.size != 64) {
+                throw new IllegalArgumentException(
+                        "field '" + fi.name + "': FLOAT requires size 32 or 64, got " + fi.size);
+            }
+            if (fi.type == FieldType.BCD && (fi.size <= 0 || fi.size % 4 != 0)) {
+                throw new IllegalArgumentException(
+                        "field '" + fi.name + "': BCD requires size in nibbles (multiples of 4 bits)");
             }
         }
     }
@@ -377,7 +400,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
         // -1. sentinel:序列化路径按当前值算位数;反序列化路径尺寸无意义
         //     (readSentinelValue 自行扫描标记),直接吃剩余字节。
-        if (fi.sentinel >= 0) {
+        if (fi.hasSentinel()) {
             return deserialize ? remainingBits : sentinelTotalBits(fi, obj);
         }
         // 0. LIST:总位数 = 各元素 serialize 后累加
@@ -391,9 +414,25 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 return s;
             }
         }
-        // 2. 声明式 lengthField(Phase 2b 加 lengthAdjust 偏移)
+        // 2. 声明式 lengthField(Phase 2b 加 lengthAdjust 偏移;lengthAscii 支持 LLVAR 文本数字长度)
         if (!fi.lengthField.isEmpty() && ctx.hasRead(fi.lengthField)) {
-            int ref = ctx.getInt(fi.lengthField);
+            Object refVal = ctx.get(fi.lengthField);
+            long ref;
+            if (refVal instanceof Number n) {
+                ref = n.longValue();
+            } else if (fi.lengthAscii && refVal instanceof String str) {
+                try {
+                    ref = Long.parseLong(str.trim());
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            "lengthField '" + fi.lengthField + "' of '" + fi.name
+                                    + "': not ASCII decimal digits: \"" + str + "\"");
+                }
+            } else {
+                throw new IllegalArgumentException(
+                        "lengthField '" + fi.lengthField + "' of '" + fi.name + "' is not numeric"
+                                + (fi.lengthAscii ? "" : " (ASCII digits need lengthAscii=true)"));
+            }
             if (fi.lengthUnit == LengthUnit.BYTES) {
                 return (ref + fi.lengthAdjust) * 8L;
             }
@@ -448,6 +487,29 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         if (list == null) {
             return 0;
         }
+        // count 驱动且计数字段未设置(0):按列表长度自动回填(ELEMENTS=个数/BYTES=字节)。
+        // 在第一遍(算总位数)完成,早于任何字段写入。BYTES 需要元素定长,ELEMENTS 不需要。
+        if (!fi.countField.isEmpty() && !fi.untilEnd) {
+            java.lang.reflect.Field cf = findFieldByName(obj.getClass(), fi.countField);
+            if (cf != null && numberFieldValue(cf, obj) == 0) {
+                long v;
+                if (fi.countUnit == com.example.netproto.annotation.CountUnit.BYTES) {
+                    v = list.size() * (fixedBitSize(fi.elementClass) / 8);
+                } else {
+                    v = list.size();
+                }
+                cf.setAccessible(true);
+                if (cf.getType() == int.class || cf.getType() == Integer.class) {
+                    cf.set(obj, (int) v);
+                } else if (cf.getType() == long.class || cf.getType() == Long.class) {
+                    cf.set(obj, v);
+                } else if (cf.getType() == short.class || cf.getType() == Short.class) {
+                    cf.set(obj, (short) v);
+                } else if (cf.getType() == byte.class || cf.getType() == Byte.class) {
+                    cf.set(obj, (byte) v);
+                }
+            }
+        }
         ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
         long total = 0;
         for (Object elem : list) {
@@ -500,7 +562,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         } else {
             throw new IllegalStateException("sentinel field " + fi.name + " must be byte[] or List");
         }
-        return dataBits + 8;  // + 标记字节
+        return dataBits + 8L * fi.sentinelByteLen();  // + 标记字节(单/多字节)
     }
 
     /**
@@ -544,6 +606,30 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 "sentinelOn field '" + sentinelOn + "' not found in " + elementClass.getName());
     }
 
+    /** 按名查找字段(含本类声明)。 */
+    private static java.lang.reflect.Field findFieldByName(Class<?> type, String name) {
+        for (java.lang.reflect.Field f : type.getDeclaredFields()) {
+            if (f.getName().equals(name)) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    /** 读数值字段为 long(非数值/不可读返回 0)。 */
+    private static long numberFieldValue(java.lang.reflect.Field f, Object obj) {
+        if (f == null) {
+            return 0;
+        }
+        try {
+            f.setAccessible(true);
+            Object v = f.get(obj);
+            return v instanceof Number n ? n.longValue() : 0;
+        } catch (IllegalAccessException e) {
+            return 0;
+        }
+    }
+
     /** LIST/TLV 元素级字节区间(字段↔字节联动的细粒度数据源,key 形如 "items[2]")。 */
     private void putElemRange(String field, int index, int fromBit, int toBit) {
         if (toBit > fromBit) {
@@ -561,8 +647,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     private Object readValue(FieldInfo fi, BitCursor cursor, int size, FieldContext ctx) throws Exception {
-        // sentinel 反序列化(跨 BYTES/LIST,优先)
-        if (fi.sentinel >= 0) {
+        // sentinel 反序列化(跨 BYTES/LIST,优先;单/多字节终结符同路径)
+        if (fi.hasSentinel()) {
             return readSentinelValue(fi, cursor);
         }
         FieldType type = effectiveType(fi);
@@ -573,6 +659,25 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     v = reverseBytes(v, size / 8);
                 }
                 yield convertToFieldType(fi.field.getType(), v, type == FieldType.UNSIGNED, fi.enumClass, fi.flagClass);
+            }
+            case FLOAT -> {
+                if (size == 32) {
+                    yield Float.intBitsToFloat((int) cursor.readBits(32));
+                }
+                yield Double.longBitsToDouble(cursor.readBits(64));
+            }
+            case BCD -> {
+                long raw = cursor.readBits(size);
+                long v = 0;
+                for (int shift = size - 4; shift >= 0; shift -= 4) {
+                    int d = (int) ((raw >> shift) & 0xF);
+                    if (d > 9) {
+                        throw new IllegalStateException(
+                                "BCD field '" + fi.name + "': invalid digit 0x" + Integer.toHexString(d));
+                    }
+                    v = v * 10 + d;
+                }
+                yield convertToFieldType(fi.field.getType(), v, false, fi.enumClass, fi.flagClass);
             }
             case BYTES -> cursor.readBytes(size);
             case STRING -> new String(cursor.readBytes(size), Charset.forName(fi.charset));
@@ -620,8 +725,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                         }
                     }
                 } else {
-                    // count 驱动(Phase 2a 原逻辑)
+                    // count 驱动(Phase 2a 原逻辑;countUnit=BYTES 时按元素定长换算个数)
                     int count = ctx.getInt(fi.countField);
+                    if (fi.countUnit == com.example.netproto.annotation.CountUnit.BYTES) {
+                        long elemBits = fixedBitSize(fi.elementClass);
+                        count = (int) ((count * 8L + elemBits - 1) / elemBits);
+                    }
                     for (int i = 0; i < count; i++) {
                         int before = cursor.bitOffset();
                         byte[] rest = cursor.remainingFromCursor();
@@ -677,14 +786,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             ProtocolCodec<?> elementCodec = codecFor(fi.elementClass);
             java.util.List<Object> list = new java.util.ArrayList<>();
             while (true) {
-                int peek = cursor.peekByte();
-                if (peek == fi.sentinel) {
-                    cursor.skipBits(8);  // 消费标记字节
+                if (atSentinelMarker(fi, cursor)) {
+                    cursor.skipBits(8 * fi.sentinelByteLen());  // 消费标记
                     break;
                 }
-                if (peek < 0) {
+                if (cursor.peekByte() < 0) {
                     throw new IllegalStateException(
-                            "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
+                            "sentinel field " + fi.name + ": reached end of data without marker");
                 }
                 int before = cursor.bitOffset();
                 byte[] rest = cursor.remainingFromCursor();
@@ -698,14 +806,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             // BYTES/String:逐字节读到标记
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
             while (true) {
-                int peek = cursor.peekByte();
-                if (peek == fi.sentinel) {
-                    cursor.skipBits(8);  // 消费标记
+                if (atSentinelMarker(fi, cursor)) {
+                    cursor.skipBits(8 * fi.sentinelByteLen());  // 消费标记
                     break;
                 }
-                if (peek < 0) {
+                if (cursor.peekByte() < 0) {
                     throw new IllegalStateException(
-                            "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
+                            "sentinel field " + fi.name + ": reached end of data without marker");
                 }
                 bos.write((int) cursor.readBits(8));  // 读一字节(取低8位)
             }
@@ -716,9 +823,18 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
     }
 
+    /** 游标当前位置是否命中终结标记(单/多字节);命中不消费。 */
+    private boolean atSentinelMarker(FieldInfo fi, BitCursor cursor) {
+        if (fi.sentinelBytes.length > 0) {
+            byte[] peek = cursor.peekBytes(fi.sentinelBytes.length);
+            return peek != null && java.util.Arrays.equals(peek, fi.sentinelBytes);
+        }
+        return cursor.peekByte() == fi.sentinel;
+    }
+
     private void writeValue(FieldInfo fi, Object obj, BitCursor cursor, int size, FieldContext ctx) throws Exception {
         // sentinel 序列化:写数据 + 追加标记字节
-        if (fi.sentinel >= 0) {
+        if (fi.hasSentinel()) {
             writeSentinelValue(fi, obj, cursor);
             return;
         }
@@ -738,6 +854,22 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 }
                 cursor.writeBits(v, size);
             }
+            case FLOAT -> {
+                if (size == 32) {
+                    cursor.writeBits(Float.floatToIntBits(((Number) value).floatValue()), 32);
+                } else {
+                    cursor.writeBits(Double.doubleToLongBits(((Number) value).doubleValue()), 64);
+                }
+            }
+            case BCD -> {
+                long v = convertFromFieldType(value);
+                long out = 0;
+                for (int i = 0; i < size / 4; i++) {
+                    out |= (v % 10) << (4 * i);
+                    v /= 10;
+                }
+                cursor.writeBits(out, size);
+            }
             case BYTES -> cursor.writeBytes((byte[]) value);
             case STRING -> cursor.writeBytes(((String) value).getBytes(Charset.forName(fi.charset)));
             case NESTED -> {
@@ -755,13 +887,19 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     }
                     cursor.writeBits(fi.sentinelValue, fi.sentinelOnSize);
                 } else {
-                    // count 驱动时校验个数一致;untilEnd/sentinel 驱动不校验
+                    // count 驱动时校验个数一致(回填在第一遍 listTotalBits 已完成)
                     if (!fi.countField.isEmpty()) {
-                        int declared = ctx.getInt(fi.countField);
-                        if (declared != list.size()) {
+                        boolean byBytes = fi.countUnit == com.example.netproto.annotation.CountUnit.BYTES;
+                        long expected = byBytes
+                                ? list.size() * (fixedBitSize(fi.elementClass) / 8)
+                                : list.size();
+                        java.lang.reflect.Field cf = findFieldByName(obj.getClass(), fi.countField);
+                        long declared = numberFieldValue(cf, obj);
+                        if (declared != expected) {
                             throw new IllegalStateException(
                                     "LIST field '" + fi.name + "': countField '" + fi.countField
-                                            + "'=" + declared + " but list.size()=" + list.size());
+                                            + "'=" + declared + " but " + (byBytes ? "bytes" : "count")
+                                            + "=" + expected);
                         }
                     }
                     for (Object elem : list) {
@@ -790,7 +928,11 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         } else {
             throw new IllegalStateException("sentinel field " + fi.name + " must be String/byte[]/List");
         }
-        cursor.writeBits(fi.sentinel, 8);  // 追加标记字节
+        if (fi.sentinelBytes.length > 0) {
+            cursor.writeBytes(fi.sentinelBytes);          // 多字节标记
+        } else {
+            cursor.writeBits(fi.sentinel, 8);             // 单字节标记
+        }
     }
 
     /** LIST_TLV 序列化:每个元素 type+length+value,末尾追加 sentinel。 */
@@ -820,6 +962,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
         // INT 默认:按 Java 类型推断(BYTES/STRING/NESTED/LIST)
         Class<?> t = fi.field.getType();
+        if (t == float.class || t == Float.class || t == double.class || t == Double.class) {
+            return FieldType.FLOAT;
+        }
         if (java.util.List.class.isAssignableFrom(t)) {
             return FieldType.LIST;
         }
@@ -966,6 +1111,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         final String sentinelOn;
         final long sentinelValue;
         final int sentinelOnSize;
+        final byte[] sentinelBytes;   // 多字节终结符(空数组=未用)
+        final com.example.netproto.annotation.CountUnit countUnit;
+        final boolean lengthAscii;
         final Class<?> enumClass;
         final Class<?> flagClass;
         final int tlvEndMarker;
@@ -976,6 +1124,16 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         final boolean untilEnd;
         final FieldCodec<Object> custom;
         final Expr.Node presentIfNode;
+
+        /** 是否启用终结标记(单字节 sentinel 或多字节 sentinelStr)。 */
+        boolean hasSentinel() {
+            return sentinel >= 0 || sentinelBytes.length > 0;
+        }
+
+        /** 终结标记的字节数。 */
+        int sentinelByteLen() {
+            return sentinelBytes.length > 0 ? sentinelBytes.length : 1;
+        }
 
         /** 常规字段构造:读取 @ProtocolField 的全部属性。 */
         FieldInfo(Field f) {
@@ -1000,6 +1158,16 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             this.lengthAdjust = ann.lengthAdjust();
             this.sentinel = ann.sentinel();
             this.sentinelOn = ann.sentinelOn();
+            this.countUnit = ann.countUnit();
+            this.lengthAscii = ann.lengthAscii();
+            String sstr = ann.sentinelStr();
+            if (!sstr.isEmpty() && this.sentinel >= 0) {
+                throw new IllegalArgumentException(
+                        "field '" + this.name + "': sentinel and sentinelStr are mutually exclusive");
+            }
+            this.sentinelBytes = sstr.isEmpty()
+                    ? new byte[0]
+                    : sstr.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
             this.sentinelValue = ann.sentinelValue();
             if (!this.sentinelOn.isEmpty()) {
                 if (this.elementClass == void.class) {
@@ -1084,6 +1252,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             this.sentinelOn = "";
             this.sentinelValue = 0;
             this.sentinelOnSize = 0;
+            this.sentinelBytes = new byte[0];
+            this.countUnit = com.example.netproto.annotation.CountUnit.ELEMENTS;
+            this.lengthAscii = false;
             this.endian = com.example.netproto.annotation.Endian.BIG;
             this.enumClass = void.class;
             this.flagClass = void.class;

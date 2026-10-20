@@ -887,19 +887,22 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     }
                     cursor.writeBits(fi.sentinelValue, fi.sentinelOnSize);
                 } else {
-                    // count 驱动时校验个数一致(回填在第一遍 listTotalBits 已完成)
+                    // count 驱动时校验个数一致(回填在第一遍 listTotalBits 已完成);
+                    // declared<0 = null 数组语义(如 Kafka topicsCount=-1):跳过校验,写空列表
                     if (!fi.countField.isEmpty()) {
                         boolean byBytes = fi.countUnit == com.example.netproto.annotation.CountUnit.BYTES;
-                        long expected = byBytes
-                                ? list.size() * (fixedBitSize(fi.elementClass) / 8)
-                                : list.size();
                         java.lang.reflect.Field cf = findFieldByName(obj.getClass(), fi.countField);
                         long declared = numberFieldValue(cf, obj);
-                        if (declared != expected) {
-                            throw new IllegalStateException(
-                                    "LIST field '" + fi.name + "': countField '" + fi.countField
-                                            + "'=" + declared + " but " + (byBytes ? "bytes" : "count")
-                                            + "=" + expected);
+                        if (declared >= 0) {
+                            long expected = byBytes
+                                    ? list.size() * (fixedBitSize(fi.elementClass) / 8)
+                                    : list.size();
+                            if (declared != expected) {
+                                throw new IllegalStateException(
+                                        "LIST field '" + fi.name + "': countField '" + fi.countField
+                                                + "'=" + declared + " but " + (byBytes ? "bytes" : "count")
+                                                + "=" + expected);
+                            }
                         }
                     }
                     for (Object elem : list) {

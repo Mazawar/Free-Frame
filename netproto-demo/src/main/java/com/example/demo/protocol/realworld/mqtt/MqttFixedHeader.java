@@ -18,7 +18,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "mqtt", name = "MQTT 3.1.1")
+@Protocol(id = "mqtt", name = "MQTT 3.1.1", group = "MQTT")
 @BindOn(parent = "tcp", when = "dstPort == 1883 || srcPort == 1883")
 public class MqttFixedHeader implements PayloadAware {
 

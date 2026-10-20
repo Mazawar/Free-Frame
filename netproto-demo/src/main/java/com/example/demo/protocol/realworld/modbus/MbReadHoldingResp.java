@@ -18,7 +18,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@Protocol(id = "modbus-read-resp", name = "Modbus 读保持寄存器响应")
+@Protocol(id = "modbus-read-resp", name = "Modbus 读保持寄存器响应", group = "Modbus")
 @BindOn(parent = "modbus", when = "functionCode == 3")
 public class MbReadHoldingResp {
 

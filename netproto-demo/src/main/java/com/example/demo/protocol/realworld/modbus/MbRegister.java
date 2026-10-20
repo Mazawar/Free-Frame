@@ -8,7 +8,7 @@ import lombok.ToString;
 /** Modbus 寄存器(16bit,大端)。 */
 @Data
 @ToString
-@Protocol(id = "modbus-register", name = "Modbus 寄存器")
+@Protocol(id = "modbus-register", name = "Modbus 寄存器", group = "Modbus")
 public class MbRegister {
 
     @ProtocolField(order = 1, size = 16)

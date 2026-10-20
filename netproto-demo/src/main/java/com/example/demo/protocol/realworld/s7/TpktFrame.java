@@ -16,7 +16,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "tpkt", name = "TPKT")
+@Protocol(id = "tpkt", name = "TPKT", group = "S7comm")
 @BindOn(parent = "tcp", when = "dstPort == 102 || srcPort == 102")
 public class TpktFrame implements PayloadAware {
 

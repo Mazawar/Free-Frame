@@ -22,7 +22,10 @@ export const filteredNewestFirst = computed(() => {
   const out: Packet[] = []
   for (let i = store.packets.length - 1; i >= 0; i--) {
     const p = store.packets[i]!
-    if (p.layers.some(l => store.enabled.has(l.id))) out.push(p)
+    // 按最深协议过滤(与表格"协议"列一致):取消某组即隐藏以该组协议为最深层的帧;
+    // 若按"任一层命中"则传输层总会命中,组过滤形同虚设
+    const deepest = p.layers[p.layers.length - 1]?.id
+    if (deepest && store.enabled.has(deepest)) out.push(p)
   }
   return out
 })

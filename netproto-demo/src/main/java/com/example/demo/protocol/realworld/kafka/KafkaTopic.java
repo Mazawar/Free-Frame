@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 /** Kafka 主题名元素:int16 长度前缀字符串。 */
 @Data
 @ToString
-@Protocol(id = "kafka-topic", name = "Kafka 主题")
+@Protocol(id = "kafka-topic", name = "Kafka 主题", group = "Kafka")
 public class KafkaTopic {
 
     @ProtocolField(order = 1, size = 16)

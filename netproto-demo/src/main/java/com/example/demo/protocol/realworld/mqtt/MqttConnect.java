@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  */
 @Data
 @ToString
-@Protocol(id = "mqtt-connect", name = "MQTT CONNECT")
+@Protocol(id = "mqtt-connect", name = "MQTT CONNECT", group = "MQTT")
 @BindOn(parent = "mqtt", when = "type == 1")
 public class MqttConnect {
 

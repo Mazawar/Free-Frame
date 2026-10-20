@@ -27,6 +27,9 @@ public @interface Protocol {
     /** 内置协议标记(仅 UI 徽标语义,不影响分派)。 */
     boolean builtin() default false;
 
+    /** 协议分组名(仅 UI 归纳语义):同组协议在侧栏折叠到一块,如 "Modbus"/"S7comm"。 */
+    String group() default "";
+
     /** 报文级编解码器(必须实现 PacketCodec 且有无参构造);void.class = 反射式默认。 */
     Class<?> codec() default void.class;
 }

@@ -17,7 +17,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@Protocol(id = "modbus-write-multi", name = "Modbus 写多寄存器请求")
+@Protocol(id = "modbus-write-multi", name = "Modbus 写多寄存器请求", group = "Modbus")
 @BindOn(parent = "modbus", when = "functionCode == 16")
 public class MbWriteMultiReq {
 

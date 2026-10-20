@@ -16,7 +16,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "cotp", name = "COTP")
+@Protocol(id = "cotp", name = "COTP", group = "S7comm")
 @BindOn(parent = "tpkt", when = "version == 3")
 public class CotpFrame implements PayloadAware {
 

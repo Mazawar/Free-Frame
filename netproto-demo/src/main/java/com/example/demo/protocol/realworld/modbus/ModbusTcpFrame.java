@@ -18,7 +18,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "modbus", name = "Modbus TCP")
+@Protocol(id = "modbus", name = "Modbus TCP", group = "Modbus")
 @BindOn(parent = "tcp", when = "dstPort == 502 || srcPort == 502")
 public class ModbusTcpFrame implements PayloadAware {
 

@@ -84,6 +84,8 @@ public class NetprotoController {
             m.put("id", e.id());
             m.put("name", e.name());
             m.put("builtin", e.builtin());
+            m.put("group", e.type().getAnnotation(Protocol.class) != null
+                    ? e.type().getAnnotation(Protocol.class).group() : "");
             m.put("fields", fieldMeta(e.type()));
             String category;
             if (elementClasses.contains(e.type())) {

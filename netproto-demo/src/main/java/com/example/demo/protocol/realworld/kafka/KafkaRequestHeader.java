@@ -18,7 +18,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "kafka", name = "Kafka 请求")
+@Protocol(id = "kafka", name = "Kafka 请求", group = "Kafka")
 @BindOn(parent = "tcp", when = "dstPort == 9092 || srcPort == 9092")
 public class KafkaRequestHeader implements PayloadAware {
 

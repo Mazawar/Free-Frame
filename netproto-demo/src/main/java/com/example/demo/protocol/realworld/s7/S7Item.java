@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "s7-item", name = "S7 Item")
+@Protocol(id = "s7-item", name = "S7 Item", group = "S7comm")
 public class S7Item {
 
     @ProtocolField(order = 1, size = 8)

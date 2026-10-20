@@ -65,6 +65,28 @@ class FieldTypeExtrasTest {
         private List<Elem2> items = new ArrayList<>();
     }
 
+    /** null 数组语义:countField=-1(Kafka topicsCount 同款)。 */
+    @Data
+    @ToString
+    @Protocol(id = "t-null-array")
+    static class NullArrayMsg {
+        @ProtocolField(order = 1, size = 32, type = FieldType.UNSIGNED)
+        private long topicsCount;
+        @ProtocolField(order = 2, type = FieldType.LIST, countField = "topicsCount",
+                elementClass = Elem2.class)
+        private List<Elem2> topics = new ArrayList<>();
+    }
+
+    /** 多字节终结符驱动的 LIST:元素读到 "\r\n" 停。 */
+    @Data
+    @ToString
+    @Protocol(id = "t-crlf-list")
+    static class CrlfListMsg {
+        @ProtocolField(order = 1, type = FieldType.LIST,
+                sentinelStr = "\r\n", elementClass = Elem2.class)
+        private List<Elem2> items = new ArrayList<>();
+    }
+
     @Data
     @ToString
     @Protocol(id = "t-llvar")
@@ -173,5 +195,36 @@ class FieldTypeExtrasTest {
         out.setPanLen("07");
         assertArrayEquals("074222222".getBytes(),
                 new ProtocolCodec<>(LlvarMsg.class).serialize(out));
+    }
+
+    // ---- null 数组(count=-1) ----
+
+    @Test
+    void nullArrayNegativeCountRoundTrip() {
+        NullArrayMsg out = new NullArrayMsg();
+        out.setTopicsCount(-1L);   // unsigned 32 位读出为 0xFFFFFFFF,语义即 -1
+        byte[] encoded = new ProtocolCodec<>(NullArrayMsg.class).serialize(out);
+        assertEquals(4, encoded.length);            // 仅 count 字段,无元素
+
+        NullArrayMsg back = new ProtocolCodec<>(NullArrayMsg.class).deserialize(encoded);
+        assertEquals(0xFFFFFFFFL, back.getTopicsCount());
+        assertTrue(back.getTopics().isEmpty());     // 负计数 = 空列表,不报错
+    }
+
+    // ---- sentinelStr + LIST ----
+
+    @Test
+    void multiByteSentinelDrivesList() {
+        // 3 个 2 字节元素 + "\r\n" 终结
+        byte[] raw = new byte[]{0x0B, (byte) 0xEE, 0x12, 0x34, 0x56, 0x78, '\r', '\n'};
+        CrlfListMsg m = new ProtocolCodec<>(CrlfListMsg.class).deserialize(raw);
+        assertEquals(3, m.getItems().size());
+        assertEquals(0x1234, m.getItems().get(1).getV());
+
+        CrlfListMsg out = new CrlfListMsg();
+        out.getItems().add(elem(7));
+        out.getItems().add(elem(8));
+        assertArrayEquals(new byte[]{0, 7, 0, 8, '\r', '\n'},
+                new ProtocolCodec<>(CrlfListMsg.class).serialize(out));
     }
 }

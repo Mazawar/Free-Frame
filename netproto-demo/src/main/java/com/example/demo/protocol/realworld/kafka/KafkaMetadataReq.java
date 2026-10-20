@@ -16,7 +16,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@Protocol(id = "kafka-metadata", name = "Kafka Metadata 请求")
+@Protocol(id = "kafka-metadata", name = "Kafka Metadata 请求", group = "Kafka")
 @BindOn(parent = "kafka", when = "apiKey == 3")
 public class KafkaMetadataReq {
 

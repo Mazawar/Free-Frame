@@ -13,7 +13,7 @@ import java.util.List;
 /** S7 读变量 Job(msgType=1):function 0x04 + 定长 12 字节 Item 列表。 */
 @Data
 @ToString
-@Protocol(id = "s7-read-job", name = "S7 读变量请求")
+@Protocol(id = "s7-read-job", name = "S7 读变量请求", group = "S7comm")
 @BindOn(parent = "s7", when = "msgType == 1")
 public class S7ReadJob {
 

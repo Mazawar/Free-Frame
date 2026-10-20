@@ -17,7 +17,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "s7", name = "S7comm")
+@Protocol(id = "s7", name = "S7comm", group = "S7comm")
 @BindOn(parent = "cotp", when = "pduType == 0xF0")
 public class S7Header implements PayloadAware {
 

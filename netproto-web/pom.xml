@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.netproto</groupId>
+        <artifactId>netproto-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>netproto-web</artifactId>
+    <name>netproto-web</name>
+    <description>Spring Boot starter:自动装配(扫描 @Protocol)+ 采集引擎 + 原始发包 + REST/SSE + 内置观测页面</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.netproto</groupId>
+            <artifactId>netproto-core</artifactId>
+        </dependency>
+        <!-- 内置协议栈可选:未引入时 builtin-packages 扫描降级为空,用户可自带协议栈 -->
+        <dependency>
+            <groupId>com.netproto</groupId>
+            <artifactId>netproto-protocols</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.pcap4j</groupId>
+            <artifactId>pcap4j-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 本模块测试需要内置栈验证装配(仅测试可见,对使用方仍是可选) -->
+        <dependency>
+            <groupId>com.netproto</groupId>
+            <artifactId>netproto-protocols</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

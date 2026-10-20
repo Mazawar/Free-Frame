@@ -1,233 +1,155 @@
-# Free-Frame
+# netproto — 注解驱动的自顶向下协议引擎
 
-通用协议编解码引擎:用「实体类 + 注解」定义任意二进制协议,开箱即用、像 Wireshark 一样抓包解析。
+用**注解**定义任意复杂的二进制协议:条件解析、四种循环解析、变长、位级、异构 TLV 分派、计算字段,全部声明式;整条协议栈(Ethernet → IPv4 → UDP/TCP → 你的业务协议)本身就用同一套注解描述,运行时**自顶向下**分派——**只解析被 `@Protocol` 标记的协议**,其余流量保持原始字节。Spring Boot 自动装配、内置实时观测页面、原始以太网帧注入发包。
 
-## Protocol Codec (Phase 1)
+> 设计文档:`docs/superpowers/specs/2026-10-19-protocol-stack-redesign.md`(完整规范)
+> 分支:`redesign/protocol-stack`
 
-定义一个协议 = 写一个实体类。引擎根据 `@ProtocolField` / `@Payload` 注解自动完成实体 ⇄ 字节序列的双向映射。
+## 三分钟接入
 
-### 支持的特性
-
-- **位级字段** —— 子字节(4/6/13 bit 等),MSB 优先 / 网络序大端 / 跨字节边界
-- **声明式长度引用** —— `lengthField` 引用某字段值作为变长长度(BYTES / BITS 单位)
-- **条件字段** —— `presentIf = "field==value"` 满足才出现
-- **协议嵌套** —— `type = NESTED`,实体引用实体,递归编解码
-- **字符串编码** —— `charset`(UTF-8 / ASCII / GBK …)
-- **算术复杂长度** —— 实现 `DynamicSize` 钩子(如 IPv4 的 `(IHL-5)*4`)
-- **类型** —— `INT` / `UNSIGNED` / `BYTES` / `STRING` / `NESTED`
-
-### 验收
-
-- **真实 IPv4 包与 pcap4j 逐字段 parity** —— `Ipv4ParityTest`:用 pcap4j 构造标准 IPv4 包,喂给我们的 `Ipv4Header` codec,13 个字段(version/ihl/tos/totalLength/identification/flags/fragmentOffset/ttl/protocol/headerChecksum/sourceIp/destinationIp/options)全部与 pcap4j 一致。证明「实体类定义」匹配久经考验的解析器。
-- `MyProtocol` 老协议零改动回归
-- 位字段 / 嵌套 / 条件 / 长度引用 / 钩子 / 注册期不变式 单元覆盖(23 个测试全绿)
-
-### 运行
+```java
+// 1. 定义协议:一个 POJO + 注解,无需手写任何序列化代码
+@Protocol(id = "my-app", name = "My App Protocol")
+@BindOn(parent = "udp", when = "dstPort == 9999 || srcPort == 9999")
+@Data
+public class MyProtocol {
+    @ProtocolField(order = 1, size = 8)  private byte version = 1;
+    @ProtocolField(order = 2, size = 8)  private byte type;
+    @ProtocolField(order = 3, size = 16) private short reserved;
+    @ProtocolField(order = 4, size = 32) private int sequenceId;
+    @Payload                              private byte[] payloadData;
+}
+```
 
 ```bash
+# 2. 启动(自动扫描 @Protocol 注册,内置协议栈恒可用)
 ./mvnw spring-boot:run
-# 打开 http://localhost:8080
-# 选网卡 → 开始抓包,IPv4 流量会显示 [IPv4] v=4 ihl=5 ttl=64 proto=17 src=.. dst=..
+# 3. 打开 http://localhost:8080 —— 观测页面:实时帧表格 / 层级树 / 字段表 / hex 高亮 / 发包面板
 ```
 
-测试:`./mvnw test`
+线上出现 UDP 9999 的流量时,自动走完 `ethernet▸ipv4▸udp▸my-app` 四层解析;其它未注册协议的流量停在已注册层,payload 不做任何解析。
 
-### 示例
+## 注解语言:六维度 + 三级逃生舱
 
-定义一个协议(实体类):
+任何二进制协议的复杂度 = 六个正交维度,注解覆盖常用形态,长尾走逃生舱:
+
+| 维度 | 声明式写法 |
+|---|---|
+| 位级定长 | `@ProtocolField(order, size)` —— 4/6/13 bit,MSB 优先大端,跨字节 |
+| 出现条件 | `presentIf = "ihl > 5"`(`== != < <= > >= && \|\| !` + 0x 字面量,只能引用先验字段) |
+| 变长 | `lengthField + lengthUnit + lengthAdjust`(UDP「长度含自身」用负 adjust) |
+| 循环·count | `type = LIST, elementClass = X.class, countField = "n"` |
+| 循环·终止符 | `sentinel = 0x00`(byte[]/String/List 皆可,C 风格零终止字符串) |
+| 循环·耗尽 | `untilEnd = true`(读到本层末尾;元素须自定边界) |
+| 循环·异构分派 | `type = LIST_TLV, dispatch = {"1=SubnetMask","3=Router"}, tlvEndMarker = 255` |
+| 元素内终止 | `sentinelOn + sentinelValue`(DNS 名标签) |
+| 计算字段 | `@ChecksumField` + 实体实现 `Checksum`(编码置 0 → 序列化 → 回写) |
+| 上下文钩子 | `DynamicSize`(尺寸)、`PayloadAware`(组装期长度) |
+| 展示元数据 | `label`(Wireshark 式字段名)、`group`(命名组,观测页折叠;注册期校验相邻+字节对齐) |
+
+**逃生舱**(覆盖"所有"协议的真正答案——加逃生舱,不加注解语法):
 
 ```java
-@Data @ToString
-@ProtocolPacket(port = 0)
-public class Ipv4Header implements DynamicSize {
-    @ProtocolField(order=1,  size=4)   private int version;
-    @ProtocolField(order=2,  size=4)   private int ihl;        // 32-bit words
-    @ProtocolField(order=3,  size=8)   private int tos;
-    @ProtocolField(order=4,  size=16)  private int totalLength;
-    @ProtocolField(order=5,  size=16)  private int identification;
-    @ProtocolField(order=6,  size=3)   private int flags;      // reserved/df/mf
-    @ProtocolField(order=7,  size=13)  private int fragmentOffset;
-    @ProtocolField(order=8,  size=8)   private int ttl;
-    @ProtocolField(order=9,  size=8)   private int protocol;
-    @ProtocolField(order=10, size=16)  private int headerChecksum;
-    @ProtocolField(order=11, size=32)  private int sourceIp;
-    @ProtocolField(order=12, size=32)  private int destinationIp;
-    @ProtocolField(order=13, type=BYTES) private byte[] options;
+// L2 字段级:一个字段太怪(varint/压缩指针/offset 定位),10 行代码接管它
+public class VarintCodec implements FieldCodec<Long> { /* read/write/sizeOf */ }
+@ProtocolField(order = 2, custom = VarintCodec.class) private Long uptimeMs;
 
-    @Override public long computeSize(String field, FieldContext ctx) {
-        if ("options".equals(field)) return (ctx.getInt("ihl") * 4L - 20) * 8; // bit
-        return -1;
-    }
-}
+// L3 报文级:整个协议手写(等价 pcap4j 能力,但可插回注解栈分派)
+@Protocol(id = "quirky", codec = QuirkyHandCodec.class)
+@BindOn(parent = "udp", when = "dstPort == 8888")
 ```
 
-序列化 / 反序列化:
+设计红线:动态维度只引用先验字段(单遍、注册期静态校验);条件是手写递归下降小语言(非 SpEL,确定性可 AOT);编解码对称(round-trip 是验收标准);注解无状态(IP/TCP 重组属帧后处理器,本期不做)。
 
-```java
-ProtocolCodec<Ipv4Header> codec = new ProtocolCodec<>(Ipv4Header.class);
-byte[] bytes = codec.serialize(header);     // 实体 → 字节
-Ipv4Header parsed = codec.deserialize(bytes); // 字节 → 实体
+## 自顶向下分派
+
+内置协议栈(`protocol/builtin/`)与用户协议**同一套机制**:
+
+```
+@Protocol(id = "ipv4")  @BindOn(parent = "ethernet", when = "etherType == 0x0800")
+@Protocol(id = "ipv6")  @BindOn(parent = "ethernet", when = "etherType == 0x86DD")
+@Protocol(id = "udp")   @BindOn(parent = "ipv4",     when = "protocol == 17")
+                         @BindOn(parent = "ipv6",    when = "nextHeader == 17")
+@Protocol(id = "tcp")   @BindOn(parent = "ipv4",     when = "protocol == 6")
+                         @BindOn(parent = "ipv6",    when = "nextHeader == 6")
+@Protocol(id = "icmp")  @BindOn(parent = "ipv4",     when = "protocol == 1")
+@Protocol(id = "arp")   @BindOn(parent = "ethernet", when = "etherType == 0x0806")
 ```
 
-### Phase 2a(本版本新增)
+解码:解析 ethernet → 对已解析字段求值子绑定 → 命中 ipv4 → payload 继续下降……畸形层停止下降、无绑定停在当前层。**全程不使用 pcap4j 协议工厂**(`RawPacketListener` 只拿原始字节),这就是「只关注被标记的协议」的机制保证。
 
-- **count 驱动的同质重复数组** —— `type=LIST` + `countField` + `elementClass`,`List<X>` 字段,元素是另一个实体类(如 DNS label)。元素必须自定边界(注册期校验);序列化时要求 `countField == list.size()`。
+组装:`StackEncoder.encode([ethernet, ipv4, udp, app])` 自底向上,选择子字段(etherType/protocol/端口)按绑定 `when` **自动接线**(只填未设置的字段,显式值优先),`PayloadAware` 钩子自动填 totalLength/udp.length,校验和两遍式回写。
 
-示例(DNS Question 段,count 驱动变体):
+## Spring Boot 自动装配
 
-```java
-@ProtocolPacket
-public class DnsLabel {
-    @ProtocolField(order=1, size=8) private int length;
-    @ProtocolField(order=2, type=BYTES, lengthField="length") private byte[] content;
-}
-
-@ProtocolPacket
-public class DnsQuestion {
-    @ProtocolField(order=1, size=8) private int labelCount;
-    @ProtocolField(order=2, type=LIST, countField="labelCount", elementClass=DnsLabel.class)
-    private List<DnsLabel> labels;
-}
+```yaml
+netproto:
+  enabled: true          # 总开关
+  base-packages: []      # 用户协议扫描包;默认主应用包(内置栈恒注册)
+  root-protocol: ethernet
+  ring-size: 500
+  snaplen: 65536
 ```
 
-### Phase 2b(本版本新增)
+`NetprotoAutoConfiguration`(`AutoConfiguration.imports`)扫描 `@Protocol` → 构建分派树(重复 id / 未知父 / 非法 when → 启动失败)→ 装配 `StackDecoder` / `CaptureEngine` / `RawSender` / REST+SSE。入口类零手工注册。
 
-- **length 偏移** —— `lengthAdjust`:字段字节长度 = `lengthField值 + lengthAdjust`(解决 IP totalLen-20 这类)
-- **sentinel 结束标记** —— `sentinel=0xNN`:读到该字节就停。支持 BYTES(blob)和 LIST(重复实体),与 countField/lengthField 互斥
+## REST / SSE API
 
-示例:
-
-```java
-// IP payload:占 totalLen - 20 字节
-@ProtocolField(type=BYTES, lengthField="totalLen", lengthAdjust=-20) private byte[] payload;
-
-// C 字符串:读到 0x00 结束
-@ProtocolField(type=BYTES, sentinel=0x00) private byte[] text;
+```
+GET  /api/netproto/protocols          # 注册协议 + 字段元数据(label/group/位标志)
+GET  /api/netproto/interfaces         # 网卡列表
+POST /api/netproto/capture/start      # {iface, bpf?}
+POST /api/netproto/capture/stop
+GET  /api/netproto/capture/status
+GET  /api/netproto/packets?limit=     # 最近帧(结构化)
+GET  /api/netproto/stream             # SSE 实时推送(事件名 packet)
+POST /api/netproto/inject             # {hex} 注入原始帧,走完整解析管线(不经过网卡)
+POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原始以太网注入
+GET  /api/netproto/export             # 环形缓冲导出 .pcap(Wireshark 可打开)
+POST /api/netproto/import             # 导入 .pcap(multipart,仅以太网链路)
 ```
 
-### Phase 2d(本版本新增)
+发包 JSON 便捷格式:`byte[]` 字段给 hex 字符串;`*Mac` 字段给 `"aa:bb:cc:dd:ee:ff"`;`*Ip` 字段给点分十进制;选择子与长度字段自动填写。
 
-- **枚举语义** —— 字段类型用 `ProtocolEnum`(实现该接口的 enum),配 `enumClass` 指定具体枚举:协议里的语义数字(IP protocol 17=UDP)自动映射,可读、类型安全。未知值不中断,存原始数字(`UnknownEnumValue`),序列化零丢失。
+## 诚实边界
 
-示例:
+- Windows 采集/发包需要 **Npcap + 管理员权限**(libpcap 体系前提)。
+- raw TCP 注入无内核栈握手,仅演示/测试用途;UDP/TCP 校验和发 0(伪头属跨层信息,UDP 下合法,TCP 下演示边界)。
+- IP 分片重组、TCP 流重组是帧后处理器职责,本期未实现(`DecodedPacket` 消费者接口已预留)。
+- IPv6 只实现固定基本头:扩展头链(Hop-by-Hop/路由/分片…)不在分派树内,nextHeader 为扩展头类型时解析停在 ipv6 层;ICMPv6 校验和需伪头(跨层),组装置 0。
+- 发送帧不含 FCS(通常由驱动负责)。
 
-```java
-public enum IpProtocol implements ProtocolEnum {
-    ICMP(1), TCP(6), UDP(17);
-    private final int v;
-    IpProtocol(int v) { this.v = v; }
-    public int value() { return v; }
-}
+## 测试
 
-// 字段声明为 ProtocolEnum 接口类型 + enumClass 指定具体枚举
-@ProtocolField(order=9, size=8, enumClass=IpProtocol.class)
-private ProtocolEnum protocol;   // 读到 17 → IpProtocol.UDP;读到 89(未知)→ UnknownEnumValue(89)
+```bash
+./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-### Phase 2e(本版本新增)
+122 个测试,按模块分布:core 68(引擎+栈,内联夹具)/ protocols 44(含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST。
 
-- **位标志 `Set<Flag>`** —— 标志位(TCP flags: SYN/ACK/FIN)用 `Set` 表达,可读、可组合。序列化时各 flag 的 mask 按位 OR;反序列化按位拆解成 `EnumSet`。保留位(flag 未定义的位)忽略。
+## 模块结构(按需引入)
 
-示例:
+```
+netproto-parent
+├── netproto-core          注解 + 反射编解码引擎 + Expr 小语言 + 分派栈(Registry/Decoder/Encoder)
+│                          零依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
+├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/vlan/ipv4/ipv6/icmp/icmpv6/udp/tcp)
+│                          + DNS/DHCP/IP/TCP 扩展定义(模块共 24 个 @Protocol),依赖 core
+└── netproto-web   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
+                           + REST/SSE + 内置观测页面;protocols 为 optional(可自带协议栈)
 
-```java
-public enum TcpFlag implements ProtocolFlag {
-    FIN(0x01), SYN(0x02), ACK(0x10);
-    private final int m;
-    TcpFlag(int m) { this.m = m; }
-    public int mask() { return m; }
-}
-
-@ProtocolField(order=6, size=8, flagClass=TcpFlag.class)
-private Set<TcpFlag> flags;   // SYN+ACK → 0x12;读 0x12 → EnumSet.of(SYN,ACK)
+演示应用 netproto-demo(全模块引入 + Modbus/S7/DLT645/ISO8583/MQTT/Kafka 真实协议套件)
+在 `redesign/protocol-stack` 分支维护,不进 main。
 ```
 
-### Phase 2c1(本版本新增)
+按需引入示例:只做协议编解码 → `netproto-core`;要标准协议栈 → 加 `netproto-protocols`;
+要观测页面/采集/发包 → 加 `netproto-web`(不想用内置栈可 exclude `netproto-protocols`,
+配 `netproto.builtin-packages: []` 并提供自己的根协议)。
 
-- **异质 TLV** —— 标准 TLV(type+length 各1字节 + value)按 type 分派到不同 value 实体,sentinel 终止,未知 type 跳过。`dispatch={"1=SubnetMask","3=Router"}` 声明分派表。
+## 目录结构
 
-示例:
-
-```java
-@ProtocolField(type=FieldType.LIST_TLV, tlvEndMarker=0xFF,
-    dispatch={"1=SubnetMask", "3=Router", "53=DhcpMsgType"})
-private List<Object> options;   // type=1→SubnetMask, type=3→Router, type=0xFF→End
 ```
-
-### Phase 2c2(本版本新增)
-
-- **元素内 sentinel** —— LIST 的第三种终止方式:`sentinelOn="length", sentinelValue=0`。引擎 peek 元素首字段值,==sentinelValue 则停。解锁真实 DNS QName(length=0 表示结束)。
-
-示例:
-
-```java
-@ProtocolField(type=FieldType.LIST, elementClass=DnsLabel.class,
-    sentinelOn="length", sentinelValue=0)
-private List<DnsLabel> labels;   // 读 label,length=0 → 结束(真实 DNS QName)
+netproto-core/       com.netproto.{annotation,core,stack}
+netproto-protocols/  com.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
+netproto-web/        com.netproto.spring.{config,capture,web} + static 观测页(前端源码 ui/,Vite + TS)
 ```
-
-### Phase 3(本版本新增)
-
-- **校验和钩子** —— 实体实现 `Checksum` 接口 + `@ChecksumField` 标记,序列化时引擎自动置0→算→回写。试金石:IPv4 头校验和(16位反码求和),parity 对照 pcap4j(整头字节一致)。
-
-示例:
-
-```java
-public class Ipv4HeaderWithChecksum implements Checksum {
-    @ProtocolField(order=10, size=16) @ChecksumField
-    private int headerChecksum;
-
-    public long compute(String field, byte[] serialized) {
-        return onesComplementSum(serialized);  // serialized 里校验和字段已置 0
-    }
-}
-```
-
-**TCP/UDP 伪首部校验和(Phase 3a)**:TCP 段的校验和覆盖伪首部(源IP/目的IP/协议来自外层 IP 包)。实体用 transient 字段存伪首部信息,`compute` 拼伪首部 + serialized 反码求和。parity 对照 pcap4j 通过。
-
-```java
-public class TcpSegmentWithChecksum implements Checksum {
-    // ... TCP 字段 ...
-    private transient int pseudoSourceIp;   // 用户装配时填(来自外层 IP)
-    private transient int pseudoDestIp;
-    private transient int pseudoProtocol;   // TCP=6
-
-    public long compute(String field, byte[] serialized) {
-        byte[] pseudo = buildPseudoHeader(serialized.length);
-        return onesComplementSum(concat(pseudo, serialized));
-    }
-}
-```
-
-### 仍未覆盖(后续)
-
-- UDP 校验和实体(同 TCP 机制)
-- CRC16(Modbus 等)
-- 校验和反序列化端验证(结果存实体)
-- 非标准 TLV 元素结构(如 TCP Options 的 NOP 无 length、固定长度)
-- 未知 TLV type 零丢失(RawOption 占位)
-- 复杂条件(位掩码 / `&&`)
-- 流重组 / 分片重组(过程性,留钩子)
-
-### 设计文档
-
-- 设计 spec:
-  - Phase 1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase1-design.md`
-  - Phase 2a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2a-design.md`
-  - Phase 2b:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2b-design.md`
-  - Phase 2d:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2d-design.md`
-  - Phase 2e:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2e-design.md`
-  - Phase 2c1:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c1-design.md`
-  - Phase 2c2:`docs/superpowers/specs/2026-06-30-protocol-codec-phase2c2-design.md`
-  - Phase 3:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3-design.md`
-  - Phase 3a:`docs/superpowers/specs/2026-06-30-protocol-codec-phase3a-design.md`
-- 实施计划:
-  - Phase 1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase1.md`
-  - Phase 2a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2a.md`
-  - Phase 2b:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2b.md`
-  - Phase 2d:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2d.md`
-  - Phase 2e:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2e.md`
-  - Phase 2c1:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c1.md`
-  - Phase 2c2:`docs/superpowers/plans/2026-06-30-protocol-codec-phase2c2.md`
-  - Phase 3:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3.md`
-  - Phase 3a:`docs/superpowers/plans/2026-06-30-protocol-codec-phase3a.md`

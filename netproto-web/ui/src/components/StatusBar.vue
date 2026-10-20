@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { filteredNewestFirst, store } from '../store'
 
 const ifaceLabel = computed(() => {
@@ -7,12 +7,17 @@ const ifaceLabel = computed(() => {
   return hit ? (hit.description || hit.name).slice(0, 48) : store.iface || ''
 })
 
+// 最近 5s 滑动窗口平均帧率(空闲归 0,突发不虚高);tick 驱动空闲时的衰减刷新
+const tick = ref(0)
+let timer: number | undefined
+onMounted(() => { timer = window.setInterval(() => { tick.value++ }, 1000) })
+onUnmounted(() => window.clearInterval(timer))
+
 const rate = computed(() => {
-  if (store.packets.length < 2) return null
-  const first = store.packets[0]!
-  const last = store.packets[store.packets.length - 1]!
-  const secs = Math.max(0.001, (last.ts - first.ts) / 1000)
-  return (store.packets.length / secs).toFixed(1)
+  void tick.value
+  const now = Date.now()
+  const recent = store.packets.filter(p => now - p.ts < 5000).length
+  return recent === 0 ? null : (recent / 5).toFixed(1)
 })
 
 const sseText = computed(() =>
@@ -25,7 +30,8 @@ const sseText = computed(() =>
     <span class="num">显示 {{ filteredNewestFirst.length }}</span>
     <span v-if="rate" class="num">{{ rate }} 帧/秒</span>
     <span class="flex1"></span>
-    <span v-if="ifaceLabel" class="dim">{{ ifaceLabel }}</span>
+    <span v-if="store.captureRunning && ifaceLabel" class="dim">{{ ifaceLabel }}</span>
+    <span v-else class="dim">未采集</span>
     <span class="sse" :class="store.sse">
       <span class="dot"></span>{{ sseText }}
     </span>

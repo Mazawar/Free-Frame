@@ -220,6 +220,27 @@ class RealWorldTest {
         assertEquals("", m.getAmount());
     }
 
+    @Test
+    void iso8583LlvarPanWithAsciiLength() {
+        // F2 LLVAR:bitmap bit2 + "16"(两位 ASCII 长度) + 16 位 PAN
+        String pan = "4111111111111111";
+        byte[] frame = new byte[4 + 8 + 2 + pan.length()];
+        System.arraycopy("0100".getBytes(), 0, frame, 0, 4);
+        frame[4] = 0x40;                                   // bit2 → 首字节 0100 0000
+        System.arraycopy("16".getBytes(), 0, frame, 12, 2);
+        System.arraycopy(pan.getBytes(), 0, frame, 14, pan.length());
+
+        Iso8583Message m = new ProtocolCodec<>(Iso8583Message.class).deserialize(frame);
+        assertEquals("16", m.getPanLen());                 // ASCII 长度前缀
+        assertEquals(pan, m.getPan());                     // lengthAscii 驱动变长
+
+        // 组装方向:setField2 自动生成两位 ASCII 长度,round-trip 字节一致
+        Iso8583Message out = new Iso8583Message();
+        out.setField2(pan);
+        byte[] encoded = new ProtocolCodec<>(Iso8583Message.class).serialize(out);
+        assertArrayEquals(frame, encoded);
+    }
+
     // ================= MQTT =================
 
     @Test

@@ -45,7 +45,10 @@ export function info(p: Packet): string {
   const app = p.layers[p.layers.length - 1]
   if (tp) {
     let s = `${tp.fields.srcPort} → ${tp.fields.dstPort}`
-    if (app && !['ethernet', 'ipv4', 'udp', 'tcp', 'icmp'].includes(app.id)) s += ` [${app.name}]`
+    if (app && !['ethernet', 'ipv4', 'udp', 'tcp', 'icmp'].includes(app.id)) {
+      const tail = p.len - (app.offset + app.headerLen)
+      s += tail > 0 ? ` [${app.name},后续 ${tail} B 无已注册子协议]` : ` [${app.name}]`
+    }
     return s
   }
   const arp = p.layers.find(l => l.id === 'arp')
@@ -61,6 +64,12 @@ export function info(p: Packet): string {
     if (t === 8) return 'Echo (ping) request'
     if (t === 0) return 'Echo (ping) reply'
     return `type=${icmp.fields.type} code=${icmp.fields.code}`
+  }
+  // 兜底:最深层名;若其后仍有字节,显式提示「只解析已注册协议」机制停在此层
+  const last = p.layers[p.layers.length - 1]
+  if (last) {
+    const tail = p.len - (last.offset + last.headerLen)
+    return tail > 0 ? `${last.name}, 后续 ${tail} B 无已注册子协议` : last.name
   }
   return p.path
 }

@@ -33,12 +33,20 @@ public class Iso8583Message {
 
     // ---- 条件字段(bitmap[n] == 1 才出现) ----
 
+    /** F2 主账号 PAN:LLVAR(两位 ASCII 长度 + ≤19 位数字)。 */
+    @ProtocolField(order = 3, type = FieldType.STRING, size = 16, presentIf = "bitmap[2] == 1")
+    private String panLen = "00";
+
+    @ProtocolField(order = 4, type = FieldType.STRING,
+            lengthField = "panLen", lengthAscii = true, presentIf = "bitmap[2] == 1")
+    private String pan = "";
+
     /** F3 处理码,6B 数字。 */
-    @ProtocolField(order = 3, type = FieldType.STRING, size = 48, presentIf = "bitmap[3] == 1")
+    @ProtocolField(order = 5, type = FieldType.STRING, size = 48, presentIf = "bitmap[3] == 1")
     private String processingCode = "";
 
     /** F4 交易金额,12B 数字(分)。 */
-    @ProtocolField(order = 4, type = FieldType.STRING, size = 96, presentIf = "bitmap[4] == 1")
+    @ProtocolField(order = 6, type = FieldType.STRING, size = 96, presentIf = "bitmap[4] == 1")
     private String amount = "";
 
     /** F7 传输时间,10B MMDDhhmmss。 */
@@ -46,21 +54,27 @@ public class Iso8583Message {
     private String transmission = "";
 
     /** F11 系统跟踪审计号,6B。 */
-    @ProtocolField(order = 11, type = FieldType.STRING, size = 48, presentIf = "bitmap[11] == 1")
+    @ProtocolField(order = 8, type = FieldType.STRING, size = 48, presentIf = "bitmap[11] == 1")
     private String stan = "";
 
     /** F41 终端标识,8B。 */
-    @ProtocolField(order = 41, type = FieldType.STRING, size = 64, presentIf = "bitmap[41] == 1")
+    @ProtocolField(order = 9, type = FieldType.STRING, size = 64, presentIf = "bitmap[41] == 1")
     private String terminalId = "";
 
     /** F42 商户标识,15B。 */
-    @ProtocolField(order = 42, type = FieldType.STRING, size = 120, presentIf = "bitmap[42] == 1")
+    @ProtocolField(order = 10, type = FieldType.STRING, size = 120, presentIf = "bitmap[42] == 1")
     private String merchantId = "";
 
     // ---- 组装便捷:置位并填值 ----
 
     private void setBit(int n) {
         this.bitmap |= 1L << (64 - n);
+    }
+
+    public void setField2(String pan) {
+        setBit(2);
+        this.pan = pan;
+        this.panLen = String.format("%02d", pan.length());   // LLVAR 两位 ASCII 长度
     }
 
     public void setField3(String v) {

@@ -1,6 +1,7 @@
 package com.example.demo.protocol.realworld.modbus;
 
 import com.example.netproto.annotation.BindOn;
+import com.example.netproto.annotation.CountUnit;
 import com.example.netproto.annotation.Protocol;
 import com.example.netproto.annotation.ProtocolField;
 import com.example.netproto.core.FieldType;
@@ -12,10 +13,8 @@ import java.util.List;
 
 /**
  * Modbus 功能码 03:读保持寄存器响应 —— 定长 16bit 寄存器循环。
- * <p>
- * 注:byteCount 单位是「字节」(寄存器数×2),而引擎 countField 数「元素个数」,
- * 二者无倍率换算(真实缺口,见验证矩阵)——这里用 untilEnd 变通:data 是 PDU
- * 末段,读到帧尾等价;byteCount 保留仅作解析展示。
+ * byteCount 单位是「字节」(寄存器数×2):用 countUnit=BYTES 声明后直接驱动循环,
+ * 且组装期按元素字节数自动回填(无需手工设置)。
  */
 @Data
 @ToString
@@ -23,20 +22,20 @@ import java.util.List;
 @BindOn(parent = "modbus", when = "functionCode == 3")
 public class MbReadHoldingResp {
 
-    /** 数据字节数 = 寄存器数 × 2。 */
+    /** 数据字节数 = 寄存器数 × 2(组装期自动)。 */
     @ProtocolField(order = 1, size = 8)
     private int byteCount;
 
     @ProtocolField(order = 2, type = FieldType.LIST,
-            elementClass = MbRegister.class, untilEnd = true)
+            countField = "byteCount", countUnit = CountUnit.BYTES,
+            elementClass = MbRegister.class)
     private List<MbRegister> registers = new ArrayList<>();
 
     public static MbReadHoldingResp of(int... values) {
         MbReadHoldingResp r = new MbReadHoldingResp();
-        r.setByteCount(values.length * 2);
         for (int v : values) {
             r.getRegisters().add(MbRegister.of(v));
         }
-        return r;
+        return r;   // byteCount 由引擎回填
     }
 }

@@ -53,6 +53,31 @@ public class NetprotoController {
 
     @GetMapping("/protocols")
     public List<Map<String, Object>> protocols() {
+        // 三分类:element=被 LIST elementClass/TLV dispatch 引用的实体;
+        // stack=挂 @BindOn 或被引用为 parent(树根);island=其余(不参与以太网分派)
+        Set<Class<?>> elementClasses = new HashSet<>();
+        Set<String> parentIds = new HashSet<>();
+        for (ProtocolRegistry.Entry e : registry.all()) {
+            for (com.example.netproto.annotation.BindOn b :
+                    e.type().getAnnotationsByType(com.example.netproto.annotation.BindOn.class)) {
+                parentIds.add(b.parent());
+            }
+            for (Field f : e.type().getDeclaredFields()) {
+                ProtocolField ann = f.getAnnotation(ProtocolField.class);
+                if (ann == null) {
+                    continue;
+                }
+                if (ann.elementClass() != void.class) {
+                    elementClasses.add(ann.elementClass());
+                }
+                for (String d : ann.dispatch()) {
+                    Class<?> c = resolveDispatchEntity(d.substring(d.indexOf('=') + 1), e.type());
+                    if (c != null) {
+                        elementClasses.add(c);
+                    }
+                }
+            }
+        }
         List<Map<String, Object>> out = new ArrayList<>();
         for (ProtocolRegistry.Entry e : registry.all()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -60,9 +85,31 @@ public class NetprotoController {
             m.put("name", e.name());
             m.put("builtin", e.builtin());
             m.put("fields", fieldMeta(e.type()));
+            String category;
+            if (elementClasses.contains(e.type())) {
+                category = "element";
+            } else if (e.type().isAnnotationPresent(com.example.netproto.annotation.BindOn.class)
+                    || parentIds.contains(e.id())) {
+                category = "stack";
+            } else {
+                category = "island";
+            }
+            m.put("category", category);
             out.add(m);
         }
         return out;
+    }
+
+    /** TLV dispatch 目标类:简单名按声明类所在包解析,全限定名直接加载;找不到忽略。 */
+    private static Class<?> resolveDispatchEntity(String cls, Class<?> declaring) {
+        try {
+            if (cls.contains(".")) {
+                return Class.forName(cls);
+            }
+            return Class.forName(declaring.getPackage().getName() + "." + cls);
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
     }
 
     private static List<Map<String, Object>> fieldMeta(Class<?> type) {

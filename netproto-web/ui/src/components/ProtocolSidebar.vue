@@ -9,15 +9,25 @@ interface Group { label: string; rows: Row[] }
 const groups = computed<Group[]>(() => {
   const builtin: Row[] = []
   const custom: Row[] = []
+  const islands: Row[] = []
   for (const p of store.protocols) {
+    if (p.category === 'element') continue   // LIST/TLV 元素实体:不可过滤,不展示
     const row = { id: p.id, name: p.name, builtin: p.builtin, count: protoCounts.value.get(p.id) ?? 0 }
-    ;(p.builtin ? builtin : custom).push(row)
+    if (p.category === 'island') islands.push(row)
+    else (p.builtin ? builtin : custom).push(row)
   }
   const out: Group[] = []
   if (builtin.length) out.push({ label: '内置协议栈', rows: builtin })
   if (custom.length) out.push({ label: '业务协议', rows: custom })
+  if (islands.length) out.push({ label: '独立协议 · 不在链路分派', rows: islands })
   return out
 })
+
+function selectAll() {
+  store.protocols.forEach(p => {
+    if (p.category !== 'element') store.enabled.add(p.id)
+  })
+}
 
 function toggle(id: string, v: boolean) {
   v ? store.enabled.add(id) : store.enabled.delete(id)
@@ -28,7 +38,7 @@ function toggle(id: string, v: boolean) {
   <aside class="side">
     <div class="head">
       <span>协议</span>
-      <button class="mini" @click="store.protocols.forEach(p => store.enabled.add(p.id))">全选</button>
+      <button class="mini" @click="selectAll">全选</button>
       <button class="mini" @click="store.enabled.clear()">清空</button>
     </div>
     <div class="scroll">

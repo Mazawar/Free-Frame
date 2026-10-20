@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, nextTick, ref, watch } from 'vue'
 import { NDataTable, type DataTableColumns } from 'naive-ui'
 import type { Packet } from '../types'
 import { filteredNewestFirst, store } from '../store'
 import { endpoints, fmtTime, info, layerColor, protocolOf } from '../utils/format'
 
 const tableRef = ref<InstanceType<typeof NDataTable> | null>(null)
+const tableKey = ref(0)
 
 const rows = computed(() => filteredNewestFirst.value.slice(0, 1000))
 
@@ -48,7 +49,13 @@ const rowProps = (r: Packet) => ({
   onClick: () => { store.selected = r },
 })
 
-watch(() => rows.value.length, () => {
+watch(() => rows.value.length, (n, old) => {
+  if (old === 0 && n > 0) {
+    // 首次填充:NDataTable(virtual+flex-height)存在首帧高度竞态(行不渲染,直到下一个
+    // 数据事件),重挂载一次绕开。此后数据更新走正常增量渲染。
+    nextTick(() => { tableKey.value++ })
+    return
+  }
   const t = tableRef.value as unknown as { scrollTo?: (o: { top: number }) => void } | null
   t?.scrollTo?.({ top: 0 })
 })
@@ -56,6 +63,7 @@ watch(() => rows.value.length, () => {
 
 <template>
   <n-data-table
+    :key="tableKey"
     ref="tableRef"
     :columns="columns"
     :data="rows"

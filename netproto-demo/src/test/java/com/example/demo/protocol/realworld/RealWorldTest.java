@@ -87,6 +87,11 @@ class RealWorldTest {
         assertEquals(3, resp.getRegisters().size());   // untilEnd 读到帧尾
         assertEquals(0x0BEE, resp.getRegisters().get(0).getValue());
         assertEquals(0x5678, resp.getRegisters().get(2).getValue());
+
+        // LIST 元素级字节区间:层 @62,byteCount 1B → 寄存器 i 占 [63+2i, 65+2i)
+        var respRanges = p.layers().get(4).fieldRanges();
+        assertArrayEquals(new int[]{63, 65}, respRanges.get("registers[0]"));
+        assertArrayEquals(new int[]{67, 69}, respRanges.get("registers[2]"));
     }
 
     @Test
@@ -119,13 +124,13 @@ class RealWorldTest {
         assertEquals(1, s7.getMsgType());
         assertEquals(paramLen, s7.getParamLength());
 
-        // item 地址小端反转:字节地址 100×8=800=0x000320 → 线上小端 20 03 00
+        // item 地址:endian=LITTLE,字段即语义值 100×8=800,线上字节小端 20 03 00
         // 帧内偏移:eth(14)+ip(20)+tcp(20)=54 | tpkt(4) cotp(3) s7头(10) function+itemCount(2) item 头 9B → 地址区 @82
         var job = (S7ReadJob) p.layers().get(6).packet();
         assertEquals(1, job.getItems().size());
         S7Item item = job.getItems().get(0);
-        assertEquals(0x200300, item.getAddress());       // 大端读到的反转值
-        assertEquals(0x20, frame[82] & 0xFF);            // item 内地址区首字节(线上小端)
+        assertEquals(800, item.getAddress());          // 语义值(不再需要手动反转)
+        assertEquals(0x20, frame[82] & 0xFF);          // 线上仍为小端字节序
         assertEquals(0x03, frame[83] & 0xFF);
         assertEquals(0x00, frame[84] & 0xFF);
     }
@@ -188,10 +193,8 @@ class RealWorldTest {
         }
 
         Iso8583Message m = new ProtocolCodec<>(Iso8583Message.class).deserialize(frame);
-        assertEquals(1, m.getBmp3());
-        assertEquals(1, m.getBmp4());
-        assertEquals(1, m.getBmp11());
-        assertEquals(0, m.getBmp7());        // 未置位
+        // 位图一等语法:bitmap 为 64bit 语义值,MSB 起数 bit n == 线上第 n 个字段位
+        assertEquals(0x3020000000C00000L, m.getBitmap());   // 30 20 .. C0 ..
         assertEquals(f3, m.getProcessingCode());
         assertEquals(f4, m.getAmount());
         assertEquals(f11, m.getStan());
@@ -213,7 +216,7 @@ class RealWorldTest {
         System.arraycopy("654321".getBytes(), 0, frame, 12, 6);
         Iso8583Message m = new ProtocolCodec<>(Iso8583Message.class).deserialize(frame);
         assertEquals("654321", m.getProcessingCode());
-        assertEquals(0, m.getBmp4());
+        assertEquals(0x2000000000000000L, m.getBitmap());   // 仅 bit3
         assertEquals("", m.getAmount());
     }
 

@@ -9,6 +9,8 @@ export interface ProtocolMeta {
   id: string
   name: string
   builtin: boolean
+  /** stack=分派树协议 / island=孤岛(不在链路分派) / element=LIST/TLV 元素实体 */
+  category: string
   fields: FieldMeta[]
 }
 

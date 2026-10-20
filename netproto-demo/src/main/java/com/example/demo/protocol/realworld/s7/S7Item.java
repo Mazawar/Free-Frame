@@ -1,5 +1,6 @@
 package com.example.demo.protocol.realworld.s7;
 
+import com.example.netproto.annotation.Endian;
 import com.example.netproto.annotation.Protocol;
 import com.example.netproto.annotation.ProtocolField;
 import lombok.Data;
@@ -7,7 +8,7 @@ import lombok.ToString;
 
 /**
  * S7 Any-Type Item(定长 12 字节):[0x12,0x0A,0x10,传输大小语法] + 长度 + DB 号 + 区号 + 地址。
- * 地址是「字节地址×8 的 3 字节小端」——引擎大端位序下直接按 3 字节原始值展示(见矩阵注记)。
+ * 地址是「字节地址×8 的 3 字节小端」——endian=LITTLE,引擎按语义值读写。
  */
 @Data
 @ToString
@@ -40,8 +41,8 @@ public class S7Item {
     @ProtocolField(order = 7, size = 8)
     private int area;
 
-    /** 3 字节地址(字节地址×8,原始大端读;真实工具按小端×8 解,见矩阵)。 */
-    @ProtocolField(order = 8, size = 24)
+    /** 3 字节地址(字节地址×8,线上小端;endian=LITTLE 由引擎处理字节序)。 */
+    @ProtocolField(order = 8, size = 24, endian = Endian.LITTLE)
     private int address;
 
     public static S7Item db(int dbNumber, int startByte, int byteCount) {
@@ -49,10 +50,7 @@ public class S7Item {
         i.setLength(byteCount);
         i.setDbNumber(dbNumber);
         i.setArea(0x84);
-        // 线上格式 = 字节地址×8 的 3 字节小端;引擎整数字段为大端 → 存反转值,
-        // 使序列化字节与真实 S7 一致(小端整数支持见验证矩阵缺口)。
-        int a = startByte * 8;
-        i.setAddress(((a & 0xFF) << 16) | (a & 0xFF00) | ((a >> 16) & 0xFF));
+        i.setAddress(startByte * 8);   // 直接存语义值,序列化/解析自动小端
         return i;
     }
 }

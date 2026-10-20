@@ -18,10 +18,30 @@ const copiedKey = ref('')
 // ---- Wireshark 式层列表:每层一个顶层节点,子节点为字段 ----
 
 interface Meta {
-  kind: 'layer' | 'field'
+  kind: 'layer' | 'field' | 'listGroup' | 'element' | 'elementField'
   layerIndex: number
   fieldName?: string
   value?: unknown
+  elemIndex?: number
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 元素行摘要:对象元素取字段拼接,原始值直接格式化。 */
+function elementSummary(v: unknown): string {
+  if (isPlainObject(v)) {
+    const parts = Object.entries(v).map(([k, e]) => `${k}=${shortRaw(e)}`)
+    const s = parts.join(', ')
+    return s.length > 52 ? s.slice(0, 52) + '…' : s
+  }
+  return shortRaw(v)
+}
+
+function shortRaw(v: unknown): string {
+  const s = maybeUpperHex(fmtValue(v))
+  return s.length > 24 ? s.slice(0, 24) + '…' : s
 }
 
 function shortValue(v: unknown): string {
@@ -41,10 +61,30 @@ const treeData = computed(() => {
   return p.layers.map((l, i) => ({
     key: `L${i}`,
     meta: { kind: 'layer', layerIndex: i } satisfies Meta,
-    children: Object.entries(l.fields).map(([k, v]) => ({
-      key: `L${i}:${k}`,
-      meta: { kind: 'field', layerIndex: i, fieldName: k, value: v } satisfies Meta,
-    })),
+    children: Object.entries(l.fields).flatMap(([k, v]) => {
+      // LIST/数组字段:分组父节点 + 每元素子节点(元素 key 与引擎元素级 ranges 对齐,可联动高亮)
+      if (Array.isArray(v)) {
+        return [{
+          key: `L${i}:${k}`,
+          meta: { kind: 'listGroup', layerIndex: i, fieldName: k, value: v } satisfies Meta,
+          children: v.map((el, idx) => ({
+            key: `L${i}:${k}[${idx}]`,
+            meta: { kind: 'element', layerIndex: i, fieldName: k, elemIndex: idx, value: el } satisfies Meta,
+            children: isPlainObject(el)
+              ? Object.entries(el).map(([ek, ev]) => ({
+                  key: `L${i}:${k}[${idx}].${ek}`,
+                  meta: { kind: 'elementField', layerIndex: i, fieldName: ek, value: ev } satisfies Meta,
+                }))
+              : undefined,
+            isLeaf: !isPlainObject(el),
+          })),
+        }]
+      }
+      return [{
+        key: `L${i}:${k}`,
+        meta: { kind: 'field', layerIndex: i, fieldName: k, value: v } satisfies Meta,
+      }]
+    }),
     isLeaf: false,
   }))
 })
@@ -59,8 +99,26 @@ function renderLabel({ option }: { option: any }) {
       h('span', { class: 'loff mono' }, `@${l.offset} · ${l.headerLen} B`),
     ])
   }
+  if (meta.kind === 'listGroup') {
+    return h('span', { class: 'field-row group-row' }, [
+      h('span', { class: 'fname' }, meta.fieldName ?? ''),
+      h('span', { class: 'count-badge' }, `${(meta.value as unknown[]).length} 项`),
+    ])
+  }
+  if (meta.kind === 'element') {
+    return h('span', { class: 'field-row elem-row' }, [
+      h('span', { class: 'eidx mono' }, `[${meta.elemIndex}]`),
+      h('span', { class: 'fvalue num', title: maybeUpperHex(fmtValue(meta.value)) }, elementSummary(meta.value)),
+      h('button', {
+        class: 'copy-btn',
+        title: '复制值',
+        onClick: (e: MouseEvent) => copyField(e, option.key as string, `${meta.fieldName}[${meta.elemIndex}]`, meta.value),
+      }, [h(copiedKey.value === option.key ? Check : Copy, { size: 11 })]),
+    ])
+  }
   const name = meta.fieldName ?? ''
-  return h('span', { class: 'field-row' }, [
+  const isElemField = meta.kind === 'elementField'
+  return h('span', { class: `field-row${isElemField ? ' elem-field' : ''}` }, [
     h('span', { class: 'fname' }, name),
     h('span', { class: 'fvalue num', title: maybeUpperHex(fmtValue(meta.value)) }, shortValue(meta.value)),
     h('button', {
@@ -297,4 +355,16 @@ watch(packet, p => {
 :deep(.n-tree-node--selected .lsummary) { color: #fff; }
 :deep(.n-tree-node--selected .copy-btn) { opacity: 1; }
 :deep(.n-tree-node-indent) { width: 12px !important; }
+
+/* LIST 分组/元素行 */
+:deep(.group-row .fname) { color: #c9d1d9; font-weight: 500; }
+:deep(.count-badge) {
+  font-size: 10px; color: #8b949e; flex-shrink: 0;
+  background: rgba(139, 148, 158, .12);
+  padding: 0 6px; border-radius: 8px; line-height: 16px;
+}
+:deep(.eidx) { color: #6e7681; font-size: 11px; flex-shrink: 0; }
+:deep(.elem-row .fvalue) { max-width: 340px; }
+:deep(.elem-field .fname) { font-size: 11px; }
+:deep(.elem-field .fvalue) { font-size: 11px; max-width: 220px; }
 </style>

@@ -20,7 +20,7 @@ function inHighlight(idx: number): boolean {
       <span class="off num">{{ row.offset.toString(16).padStart(4, '0') }}</span>
       <span class="cells">
         <span v-for="(c, i) in row.cells" :key="i"
-              class="cell" :class="{ hl: inHighlight(row.offset + i) }"
+              class="cell" :class="{ hl: inHighlight(row.offset + i), g8: i === 8 }"
               :style="inHighlight(row.offset + i) ? '' : c.color ? `color:${c.color}` : 'color:#6e7681'"
               :data-byte="row.offset + i"
               :title="`0x${(row.offset + i).toString(16).padStart(4, '0')}`"
@@ -47,13 +47,15 @@ function inHighlight(idx: number): boolean {
 }
 .hrow { display: flex; white-space: pre; }
 .off { color: #484f58; width: 44px; flex-shrink: 0; user-select: none; }
-.cells { width: 336px; flex-shrink: 0; }
+.cells { width: 350px; flex-shrink: 0; }
 .cell {
   display: inline-block; width: 21px;
   text-align: center;
   cursor: pointer;
   border-radius: 2px;
 }
+/* 第 9 字节起为第二组:左移出 8 字节分组间隔 */
+.cell.g8 { margin-left: 14px; }
 .cell:hover { background: rgba(177, 186, 196, .14); }
 .cell.hl {
   background: #1f6feb;
@@ -61,6 +63,6 @@ function inHighlight(idx: number): boolean {
   font-weight: 700;
   border-radius: 0;
 }
-.ascii { color: #484f58; }
+.ascii { color: #484f58; padding-left: 18px; border-left: 1px solid #1b222b; }
 .ascii .cell { width: auto; padding: 0 1px; }
 </style>

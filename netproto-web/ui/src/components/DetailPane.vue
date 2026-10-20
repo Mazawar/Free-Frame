@@ -272,12 +272,7 @@ watch(packet, p => {
         />
       </div>
       <div class="hex-side">
-        <div class="legend">
-          <span v-for="(l, i) in packet.layers" :key="l.id" class="lg">
-            <span class="swatch" :style="{ background: layerColor(i) }"></span>
-            {{ l.id.toUpperCase() }} @{{ l.offset }}-{{ l.offset + l.headerLen }}
-          </span>
-          <span class="flex1"></span>
+        <div class="hex-actions">
           <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
           <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
         </div>
@@ -313,9 +308,7 @@ watch(packet, p => {
   padding-right: 10px; margin-right: 10px;
 }
 .hex-side { flex: 1.25; min-width: 0; display: flex; flex-direction: column; }
-.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 6px; align-items: center; }
-.lg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #8b949e; }
-.flex1 { flex: 1; }
+.hex-actions { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 2px; }
 
 /* 树节点内容 */
 :deep(.layer-row) { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }

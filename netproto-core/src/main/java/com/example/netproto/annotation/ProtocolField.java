@@ -18,6 +18,9 @@ public @interface ProtocolField {
     /** 位数(取消「8 的倍数」限制)。 */
     int size() default -1;
 
+    /** 整数字段字节序(默认大端/网络序)。LITTLE 要求 size 为 8 的倍数。 */
+    Endian endian() default Endian.BIG;
+
     /** 值类型,默认由 Java 字段类型推断。 */
     FieldType type() default FieldType.INT;
 

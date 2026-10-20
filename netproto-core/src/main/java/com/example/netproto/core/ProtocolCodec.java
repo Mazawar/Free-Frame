@@ -57,13 +57,14 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                     + "' which is not earlier in order (forward ref forbidden)");
                 }
             }
-            // presentIf 校验(只查字段存在)
+            // presentIf 校验(只查字段存在;位索引语法 name[n] 查基名)
             if (!fi.presentIf.isBlank()) {
                 int eq = fi.presentIf.indexOf("==");
                 String left = eq >= 0 ? fi.presentIf.substring(0, eq).trim() : fi.presentIf.trim();
-                if (!nameToOrder.containsKey(left)) {
+                String base = left.contains("[") ? left.substring(0, left.indexOf('[')) : left;
+                if (!nameToOrder.containsKey(base)) {
                     throw new IllegalArgumentException(
-                            "field '" + fi.name + "' presentIf references unknown field '" + left + "'");
+                            "field '" + fi.name + "' presentIf references unknown field '" + base + "'");
                 }
             }
             // LIST 校验
@@ -353,6 +354,11 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     private static long resolveCtxLong(FieldContext ctx, String name) {
+        // 位索引标识符 name[n]:位图驱动条件的一等语法(与 when 侧一致)
+        Long bit = Expr.resolveBitIndex(n -> ctx.hasRead(n) ? ctx.get(n) : null, name);
+        if (bit != null) {
+            return bit;
+        }
         if (!ctx.hasRead(name)) {
             throw new Expr.UnknownIdentifier(name);
         }
@@ -538,6 +544,22 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 "sentinelOn field '" + sentinelOn + "' not found in " + elementClass.getName());
     }
 
+    /** LIST/TLV 元素级字节区间(字段↔字节联动的细粒度数据源,key 形如 "items[2]")。 */
+    private void putElemRange(String field, int index, int fromBit, int toBit) {
+        if (toBit > fromBit) {
+            this.lastFieldRanges.put(field + "[" + index + "]", new int[]{fromBit, toBit});
+        }
+    }
+
+    /** 按 n 字节反转(LITTLE endian 整数与线上位序互转,size ≤ 64 位)。 */
+    private static long reverseBytes(long v, int n) {
+        long out = 0;
+        for (int i = 0; i < n; i++) {
+            out = (out << 8) | ((v >>> (8 * i)) & 0xFF);
+        }
+        return out;
+    }
+
     private Object readValue(FieldInfo fi, BitCursor cursor, int size, FieldContext ctx) throws Exception {
         // sentinel 反序列化(跨 BYTES/LIST,优先)
         if (fi.sentinel >= 0) {
@@ -545,7 +567,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
         FieldType type = effectiveType(fi);
         return switch (type) {
-            case INT, UNSIGNED -> convertToFieldType(fi.field.getType(), cursor.readBits(size), type == FieldType.UNSIGNED, fi.enumClass, fi.flagClass);
+            case INT, UNSIGNED -> {
+                long v = cursor.readBits(size);
+                if (fi.endian == com.example.netproto.annotation.Endian.LITTLE) {
+                    v = reverseBytes(v, size / 8);
+                }
+                yield convertToFieldType(fi.field.getType(), v, type == FieldType.UNSIGNED, fi.enumClass, fi.flagClass);
+            }
             case BYTES -> cursor.readBytes(size);
             case STRING -> new String(cursor.readBytes(size), Charset.forName(fi.charset));
             case NESTED -> {
@@ -566,10 +594,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                             cursor.skipBits(fi.sentinelOnSize);  // 消费结束标记
                             break;
                         }
+                        int before = cursor.bitOffset();
                         byte[] rest = cursor.remainingFromCursor();
                         Object elem = elementCodec.deserialize(rest, 0, rest.length);
                         list.add(elem);
                         cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                        putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
                     }
                 } else if (fi.untilEnd) {
                     // 耗尽驱动:读到本层缓冲区末尾为止(元素须自定边界,注册期已校验)
@@ -583,6 +613,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                             break;  // 防 0 字节元素死循环
                         }
                         cursor.skipBits(elemBits);
+                        putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
                         if (before + elemBits > layerEndBits) {
                             // 元素越过层边界(数据畸形):保留已读元素,停止循环
                             break;
@@ -592,10 +623,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     // count 驱动(Phase 2a 原逻辑)
                     int count = ctx.getInt(fi.countField);
                     for (int i = 0; i < count; i++) {
+                        int before = cursor.bitOffset();
                         byte[] rest = cursor.remainingFromCursor();
                         Object elem = elementCodec.deserialize(rest, 0, rest.length);
                         list.add(elem);
                         cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                        putElemRange(fi.name, i, before, cursor.bitOffset());
                     }
                 }
                 yield list;
@@ -624,10 +657,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 cursor.skipBits(length * 8);  // 未知 type 跳过
                 continue;
             }
+            int elemStart = cursor.bitOffset() - 16;   // 区间含 type+len 头
             Class<?> elemClass = resolveDispatchClass(className, contextClass);
             byte[] valueBytes = cursor.readBytes(length * 8);
             Object elem = codecFor(elemClass).deserialize(valueBytes, 0, valueBytes.length);
             list.add(elem);
+            putElemRange(fi.name, list.size() - 1, elemStart, cursor.bitOffset());
         }
         return list;
     }
@@ -651,10 +686,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     throw new IllegalStateException(
                             "sentinel field " + fi.name + ": reached end of data without marker " + fi.sentinel);
                 }
+                int before = cursor.bitOffset();
                 byte[] rest = cursor.remainingFromCursor();
                 Object elem = elementCodec.deserialize(rest, 0, rest.length);
                 list.add(elem);
                 cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
             }
             return list;
         } else {
@@ -696,6 +733,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         switch (type) {
             case INT, UNSIGNED -> {
                 long v = convertFromFieldType(value);
+                if (fi.endian == com.example.netproto.annotation.Endian.LITTLE) {
+                    v = reverseBytes(v, size / 8);
+                }
                 cursor.writeBits(v, size);
             }
             case BYTES -> cursor.writeBytes((byte[]) value);
@@ -913,6 +953,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         final String name;
         final int order;
         final int size;
+        final com.example.netproto.annotation.Endian endian;
         final FieldType type;
         final String lengthField;
         final LengthUnit lengthUnit;
@@ -943,6 +984,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             com.example.netproto.annotation.ProtocolField ann = f.getAnnotation(com.example.netproto.annotation.ProtocolField.class);
             this.order = ann.order();
             this.size = ann.size();
+            this.endian = ann.endian();
+            if (this.endian == com.example.netproto.annotation.Endian.LITTLE
+                    && (this.size <= 0 || this.size % 8 != 0)) {
+                throw new IllegalArgumentException(
+                        "field '" + this.name + "' LITTLE endian requires a fixed size in whole bytes");
+            }
             this.type = ann.type();
             this.lengthField = ann.lengthField();
             this.lengthUnit = ann.lengthUnit();
@@ -1037,6 +1084,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             this.sentinelOn = "";
             this.sentinelValue = 0;
             this.sentinelOnSize = 0;
+            this.endian = com.example.netproto.annotation.Endian.BIG;
             this.enumClass = void.class;
             this.flagClass = void.class;
             this.tlvEndMarker = -1;

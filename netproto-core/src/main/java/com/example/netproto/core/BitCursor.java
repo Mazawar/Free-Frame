@@ -28,8 +28,8 @@ public final class BitCursor {
 
     /** 从当前位偏移读 size 位(大端),并推进游标。 */
     public long readBits(int size) {
-        if (size < 0 || size > 63) {
-            throw new IllegalArgumentException("size must be 0..63, got " + size);
+        if (size < 0 || size > 64) {
+            throw new IllegalArgumentException("size must be 0..64, got " + size);
         }
         long value = 0;
         for (int i = 0; i < size; i++) {
@@ -60,8 +60,8 @@ public final class BitCursor {
 
     /** 在当前位偏移写 value 的低 size 位(大端),并推进游标。 */
     public void writeBits(long value, int size) {
-        if (size < 0 || size > 63) {
-            throw new IllegalArgumentException("size must be 0..63, got " + size);
+        if (size < 0 || size > 64) {
+            throw new IllegalArgumentException("size must be 0..64, got " + size);
         }
         for (int i = size - 1; i >= 0; i--) {
             int absBit = baseByte * 8 + bitPos + (size - 1 - i);
@@ -114,8 +114,8 @@ public final class BitCursor {
 
     /** 偷看当前游标起的 size 位(不推进)。size 须 0..63。不足 size 位(到末尾)返回 -1。 */
     public long peekBits(int size) {
-        if (size < 0 || size > 63) {
-            throw new IllegalArgumentException("peekBits size must be 0..63, got " + size);
+        if (size < 0 || size > 64) {
+            throw new IllegalArgumentException("peekBits size must be 0..64, got " + size);
         }
         long value = 0;
         for (int i = 0; i < size; i++) {

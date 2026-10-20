@@ -80,6 +80,53 @@ public final class Expr {
     }
 
     /** 递归收集 AST 中的全部标识符(注册期校验 when 引用的字段存在)。 */
+    /**
+     * 解析位索引标识符 "name[n]":按 lookup 取字段值,返回从最高有效位起第 n 位(0/1)。
+     * 位宽按 Java 装箱类型(Integer=32/Long=64/Short=16/Byte=8,其余 Number 按 64)。
+     * name 不是位索引语法时返回 null;字段不存在抛 UnknownIdentifier,非数值抛异常。
+     */
+    public static Long resolveBitIndex(java.util.function.Function<String, Object> lookup, String ident) {
+        int lb = ident.indexOf('[');
+        if (lb < 0 || !ident.endsWith("]") || ident.indexOf(']', lb) != ident.length() - 1) {
+            return null;
+        }
+        String base = ident.substring(0, lb);
+        int bit;
+        try {
+            bit = Integer.parseInt(ident.substring(lb + 1, ident.length() - 1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        Object v = lookup.apply(base);
+        if (v == null) {
+            throw new UnknownIdentifier(base);
+        }
+        long raw;
+        int width;
+        if (v instanceof Long l) {
+            raw = l;
+            width = 64;
+        } else if (v instanceof Integer i) {
+            raw = i;
+            width = 32;
+        } else if (v instanceof Short h) {
+            raw = h;
+            width = 16;
+        } else if (v instanceof Byte b) {
+            raw = b;
+            width = 8;
+        } else if (v instanceof java.lang.Number n) {
+            raw = n.longValue();
+            width = 64;
+        } else {
+            throw new UnknownIdentifier(base + " (non-numeric)");
+        }
+        if (bit < 1 || bit > width) {
+            throw new IllegalArgumentException(ident + ": bit index out of range (1-" + width + ")");
+        }
+        return (raw >>> (width - bit)) & 1L;
+    }
+
     public static void collectIdents(Node n, java.util.Set<String> out) {
         if (n instanceof Ident i) {
             out.add(i.name());
@@ -246,7 +293,30 @@ public final class Expr {
                 return new Lit(readNumber());
             }
             if (Character.isJavaIdentifierStart(c)) {
-                return new Ident(readIdent());
+                String ident = readIdent();
+                // 位索引语法:name[n] —— "name[n]" 整体作为一个标识符传给 resolver,
+                // 由 resolver 取字段值从最高有效位起第 n 位(presentIf/when 通用,
+                // 位图驱动条件的一等语法,如 bitmap[3] == 1)。
+                skipWs();
+                if (!eof() && s.charAt(pos) == '[') {
+                    pos++;
+                    skipWs();
+                    int bs = pos;
+                    while (!eof() && Character.isDigit(s.charAt(pos))) {
+                        pos++;
+                    }
+                    if (pos == bs) {
+                        throw new IllegalArgumentException("bad bit index at " + bs + " in: " + s);
+                    }
+                    String idx = s.substring(bs, pos);
+                    skipWs();
+                    if (eof() || s.charAt(pos) != ']') {
+                        throw new IllegalArgumentException("missing ']' for bit index in: " + s);
+                    }
+                    pos++;
+                    ident = ident + "[" + idx + "]";
+                }
+                return new Ident(ident);
             }
             throw new IllegalArgumentException("unexpected char '" + c + "' at " + pos + " in: " + s);
         }

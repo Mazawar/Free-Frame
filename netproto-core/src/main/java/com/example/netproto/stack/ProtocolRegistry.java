@@ -205,6 +205,11 @@ public final class ProtocolRegistry {
     }
 
     private static long resolveLenient(FieldContext ctx, String name) {
+        // 位索引标识符 name[n](与 presentIf 侧同款一等语法)
+        Long bit = Expr.resolveBitIndex(n -> ctx.hasRead(n) ? ctx.get(n) : null, name);
+        if (bit != null) {
+            return bit;
+        }
         if (!ctx.hasRead(name)) {
             throw new Expr.UnknownIdentifier(name);
         }

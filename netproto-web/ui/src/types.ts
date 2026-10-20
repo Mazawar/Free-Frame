@@ -1,8 +1,20 @@
+export interface FlagMeta {
+  name: string
+  mask: number
+}
+
 export interface FieldMeta {
   name: string
   order: number
   size: number
   type: string
+  /** 展示分组名(注解声明,同组折叠为带名父节点) */
+  group?: string
+  /** 展示名(Wireshark 式字段名;空 = 用字段名) */
+  label?: string
+  /** 位标志字段:Set<TcpFlag> 这类,值可逐位展开 */
+  flagClass?: string
+  flags?: FlagMeta[]
 }
 
 export interface ProtocolMeta {

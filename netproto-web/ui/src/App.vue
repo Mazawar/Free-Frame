@@ -8,7 +8,7 @@ import DetailPane from './components/DetailPane.vue'
 import SendDialog from './components/SendDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { api } from './api'
-import { addPacket, connectStream, refreshInterfaces, refreshProtocols, refreshStatus, store } from './store'
+import { addPackets, connectStream, refreshInterfaces, refreshProtocols, refreshStatus, store } from './store'
 
 // 克制的开发者工具配色:中性深底 + 单一强调色
 const themeOverrides: GlobalThemeOverrides = {
@@ -67,11 +67,13 @@ const themeOverrides: GlobalThemeOverrides = {
 onMounted(async () => {
   connectStream()
   await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
-  // 无论是否在采集,都恢复环形缓冲里的最近帧(停止/刷新后不丢上下文)
+  // 无论是否在采集,都恢复环形缓冲里的最近帧(停止/刷新后不丢上下文);单批一次进 store
   try {
     const recent = await api.packets(200)
-    recent.reverse().forEach(addPacket)
-  } catch { /* 服务未起 */ }
+    addPackets(recent.reverse())
+  } catch { /* 服务未起 */ } finally {
+    store.bootstrapped = true
+  }
 })
 
 // 右键菜单只在输入框内可用(便于粘贴),其余区域禁用

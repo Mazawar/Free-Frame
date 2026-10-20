@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, nextTick, ref, watch } from 'vue'
 import { NDataTable, type DataTableColumns } from 'naive-ui'
 import type { Packet } from '../types'
 import { filteredNewestFirst, store } from '../store'
 import { endpoints, fmtTime, info, layerColor, protocolOf } from '../utils/format'
 
 const tableRef = ref<InstanceType<typeof NDataTable> | null>(null)
+// 首次填充时重建表格:挂载早期容器测高为 0,虚拟列表对整批灌入的行不会自愈
+const tableKey = ref(0)
 
 const rows = computed(() => filteredNewestFirst.value.slice(0, 1000))
 
 function protoChip(p: Packet) {
   const { id, index } = protocolOf(p)
   const c = layerColor(index)
+  // 有分组的协议只显示组名(KAFKA-METADATA → KAFKA);完整链路在详情面板展示
+  const meta = store.protocols.find(x => x.id === id)
+  const label = (meta?.group || id).toUpperCase()
   return h('span', {
     style: {
       color: c,
@@ -21,7 +26,7 @@ function protoChip(p: Packet) {
       fontSize: '11px',
       fontFamily: 'ui-monospace, Consolas, monospace',
     },
-  }, id.toUpperCase())
+  }, label)
 }
 
 const columns: DataTableColumns<Packet> = [
@@ -50,21 +55,28 @@ const rowProps = (r: Packet) => ({
 
 watch(() => rows.value.length, (n, old) => {
   if (old === 0 && n > 0) {
-    return   // 首次填充:表格本就在顶部,无需滚动
+    tableKey.value++
+    return
   }
-  const t = tableRef.value as unknown as { scrollTo?: (o: { top: number }) => void } | null
-  t?.scrollTo?.({ top: 0 })
+  nextTick(() => t0().scrollTo?.({ top: 0 }))
 })
+
+function t0() {
+  return tableRef.value as unknown as { scrollTo?: (o: { top: number }) => void } | null
+}
 </script>
 
 <template>
   <n-data-table
+    v-if="store.bootstrapped"
+    :key="tableKey"
     ref="tableRef"
     :columns="columns"
     :data="rows"
     :row-key="(r: Packet) => r.seq"
     :row-props="rowProps"
     :row-class-name="(r: Packet) => store.selected?.seq === r.seq ? 'sel' : ''"
+    virtual-scroll
     flex-height style="height: 100%"
     size="small" :single-line="false"
   >

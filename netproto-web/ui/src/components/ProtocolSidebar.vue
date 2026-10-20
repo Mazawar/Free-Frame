@@ -18,7 +18,7 @@ function toggleGroup(name: string) {
 }
 
 function toRow(p: ProtocolMeta): Row {
-  return { id: p.id, name: p.name, builtin: p.builtin, count: protoCounts.value.get(p.id) ?? 0 }
+  return { id: p.id, name: p.name, builtin: p.builtin, count: protoCounts.get(p.id) ?? 0 }
 }
 
 const sections = computed<Section[]>(() => {

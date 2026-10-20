@@ -20,11 +20,13 @@ export function fmtTime(ts: number): string {
 
 export interface Endpoints { src: string; dst: string }
 
-/** 提取五元组的源/目的:ipv4 → arp → ethernet 兜底。 */
+/** 提取五元组的源/目的:ipv4/ipv6 → arp → ethernet 兜底。 */
 export function endpoints(p: Packet): Endpoints {
   const ip = p.layers.find(l => l.id === 'ipv4' || l.id === 'ipv6')
-  if (ip && ip.fields.sourceIp != null) {
-    return { src: String(ip.fields.sourceIp), dst: String(ip.fields.destinationIp ?? '?') }
+  if (ip) {
+    const src = ip.fields.sourceIp ?? ip.fields.srcIp6
+    const dst = ip.fields.destinationIp ?? ip.fields.dstIp6
+    if (src != null) return { src: String(src), dst: String(dst ?? '?') }
   }
   const arp = p.layers.find(l => l.id === 'arp')
   if (arp) return { src: String(arp.fields.senderIp ?? '?'), dst: String(arp.fields.targetIp ?? '?') }

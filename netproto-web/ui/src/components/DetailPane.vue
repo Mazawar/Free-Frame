@@ -4,6 +4,7 @@ import { NButton, NTag, NTree, useMessage } from 'naive-ui'
 import { Check, Copy, X } from 'lucide-vue-next'
 import { closeDetail, store } from '../store'
 import { copyText, fmtValue, layerColor, layerSummary } from '../utils/format'
+import type { FieldMeta, FlagMeta, LayerView } from '../types'
 import HexView from './HexView.vue'
 
 const message = useMessage()
@@ -33,10 +34,24 @@ const copiedKey = ref('')
 
 interface Meta {
   kind: 'layer' | 'field' | 'listGroup' | 'element' | 'elementField'
+    | 'namedGroup' | 'entityGroup' | 'flagGroup' | 'flagBit'
   layerIndex: number
   fieldName?: string
   value?: unknown
   elemIndex?: number
+  flags?: FlagMeta[]
+  flag?: FlagMeta
+  br?: [number, number]
+  maskHex?: string
+  startByte?: number
+  endByte?: number
+}
+
+interface TreeNode {
+  key: string
+  meta: Meta
+  children?: TreeNode[]
+  isLeaf?: boolean
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -74,6 +89,11 @@ function cap(s: string): string {
   return s ? s[0]!.toUpperCase() + s.slice(1) : s
 }
 
+/** 树展示名:注解 label(Wireshark 式字段名)优先,回退字段名首字母大写。 */
+function displayLabel(layerIndex: number, name: string): string {
+  return fieldMetaOf(layerIndex, name)?.label ?? cap(name)
+}
+
 /**
  * 亚字节字段的位展示(Wireshark 式):字段所在字节的 8 位,
  * 字段位显 0/1、其余位为「.」,如 version(4bit) → "0100 ...."。
@@ -97,16 +117,114 @@ function bitPattern(layerIndex: number, fieldName: string): string | null {
   return `${bits.slice(0, 4)} ${bits.slice(4)}`
 }
 
+/** 标志位子行的位展示:字段字节区间内,该标志的位显 0/1,其余位为「.」。 */
+function flagBitPattern(hex: string, br: [number, number] | undefined, mask: number): string | null {
+  if (!br) return null
+  const n = br[1] - br[0]
+  let out = ''
+  for (let b = br[0] >> 3; b <= (br[1] - 1) >> 3; b++) {
+    const byteVal = parseInt(hex.substr(b * 2, 2), 16)
+    let bits = ''
+    for (let j = 0; j < 8; j++) {
+      const abs = b * 8 + j
+      if (abs < br[0] || abs >= br[1]) {
+        bits += ' '
+        continue
+      }
+      const k = abs - br[0]                       // 字段内位序(MSB=0)
+      const on = (mask >> (n - 1 - k)) & 1
+      bits += on ? String((byteVal >> (7 - j)) & 1) : '.'
+    }
+    out += (out ? '  ' : '') + bits.slice(0, 4) + ' ' + bits.slice(4)
+  }
+  return out
+}
+
 const treeData = computed(() => {
   const p = packet.value
   if (!p) return []
   return p.layers.map((l, i) => ({
     key: `L${i}`,
     meta: { kind: 'layer', layerIndex: i } satisfies Meta,
-    children: Object.entries(l.fields).flatMap(([k, v]) => {
-      // LIST/数组字段:分组父节点 + 每元素子节点(元素 key 与引擎元素级 ranges 对齐,可联动高亮)
-      if (Array.isArray(v)) {
-        return [{
+    children: childrenFor(l, i),
+    isLeaf: false,
+  }))
+})
+
+/** 协议字段元数据(位标志展开需要 flagClass/flags)。 */
+function fieldMetaOf(layerIndex: number, name: string): FieldMeta | undefined {
+  const l = packet.value?.layers[layerIndex]
+  return l ? store.protocols.find(p => p.id === l.id)?.fields.find(f => f.name === name) : undefined
+}
+
+/**
+ * 注解命名组(@ProtocolField#group,注册期已校验相邻 + 字节对齐):
+ * 同组字段折叠为一个带名父节点(名 + 短 hex 值),子字段各自带位掩码,可展开。
+ */
+function namedGroupNode(l: LayerView, i: number, name: string, members: FieldMeta[]): TreeNode {
+  let startByte = Infinity
+  let endByte = -1
+  for (const m of members) {
+    const br = l.bitRanges?.[m.name]
+    if (!br) continue
+    startByte = Math.min(startByte, br[0] >> 3)
+    endByte = Math.max(endByte, (br[1] - 1) >> 3)
+  }
+  let maskHex = ''
+  if (endByte >= 0) {
+    for (let b = startByte; b <= endByte; b++) maskHex += packet.value!.hex.substr(b * 2, 2)
+  }
+  return {
+    key: `L${i}:$g${name}`,
+    meta: {
+      kind: 'namedGroup', layerIndex: i, fieldName: name, value: members.length,
+      maskHex: maskHex.toUpperCase(), startByte, endByte,
+    } satisfies Meta,
+    children: members.map(m => scalarNode(l, i, m.name)),
+    isLeaf: false,
+  }
+}
+
+/** 实体类字段值(嵌套 @Protocol 对象):带名父节点 + 可展开子字段,避免整对象串成长文本。 */
+function entityGroupNode(l: LayerView, i: number, name: string, obj: Record<string, unknown>): TreeNode {
+  return {
+    key: `L${i}:${name}$e`,
+    meta: { kind: 'entityGroup', layerIndex: i, fieldName: name, value: obj } satisfies Meta,
+    children: Object.entries(obj).map(([ek, ev]) => ({
+      key: `L${i}:${name}.${ek}`,
+      meta: { kind: 'elementField', layerIndex: i, fieldName: ek, value: ev } satisfies Meta,
+      isLeaf: true,
+    })),
+    isLeaf: false,
+  }
+}
+
+function childrenFor(l: LayerView, i: number): TreeNode[] {
+  const out: TreeNode[] = []
+  const entries = Object.entries(l.fields)
+  const groups = new Map<string, FieldMeta[]>()
+  for (const [k] of entries) {
+    const fm = fieldMetaOf(i, k)
+    if (fm?.group) {
+      if (!groups.has(fm.group)) groups.set(fm.group, [])
+      groups.get(fm.group)!.push(fm)
+    }
+  }
+  const emitted = new Set<string>()
+  for (const [k, v] of entries) {
+    const fm = fieldMetaOf(i, k)
+    if (fm?.group && groups.get(fm.group)!.length >= 2) {
+      if (emitted.has(fm.group)) continue
+      emitted.add(fm.group)
+      out.push(namedGroupNode(l, i, fm.group, groups.get(fm.group)!))
+      continue
+    }
+    if (Array.isArray(v)) {
+      if (fm?.flagClass && fm.flags && v.every(x => typeof x === 'string')) {
+        out.push(flagGroupNode(l, i, k, v as string[], fm.flags))
+      } else {
+        // LIST/数组字段:分组父节点 + 每元素子节点(元素 key 与引擎元素级 ranges 对齐,可联动高亮)
+        out.push({
           key: `L${i}:${k}`,
           meta: { kind: 'listGroup', layerIndex: i, fieldName: k, value: v } satisfies Meta,
           children: v.map((el, idx) => ({
@@ -120,16 +238,47 @@ const treeData = computed(() => {
               : undefined,
             isLeaf: !isPlainObject(el),
           })),
-        }]
+          isLeaf: false,
+        })
       }
-      return [{
-        key: `L${i}:${k}`,
-        meta: { kind: 'field', layerIndex: i, fieldName: k, value: v } satisfies Meta,
-      }]
-    }),
+      continue
+    }
+    if (isPlainObject(v)) {
+      out.push(entityGroupNode(l, i, k, v))
+      continue
+    }
+    out.push(scalarNode(l, i, k))
+  }
+  return out
+}
+
+function scalarNode(l: LayerView, i: number, k: string): TreeNode {
+  return {
+    key: `L${i}:${k}`,
+    meta: { kind: 'field', layerIndex: i, fieldName: k, value: l.fields[k] } satisfies Meta,
+    isLeaf: true,
+  }
+}
+
+/** 位标志字段(Set<TcpFlag> 类):父节点显字节值与置位名单,子节点逐位 Wireshark 式展开。 */
+function flagGroupNode(l: LayerView, i: number, name: string, setNames: string[], flags: FlagMeta[]): TreeNode {
+  const br = l.bitRanges?.[name]
+  let maskHex = ''
+  if (br) {
+    const hex = packet.value!.hex
+    for (let b = br[0] >> 3; b <= (br[1] - 1) >> 3; b++) maskHex += hex.substr(b * 2, 2)
+  }
+  return {
+    key: `L${i}:${name}$f`,
+    meta: { kind: 'flagGroup', layerIndex: i, fieldName: name, value: setNames, flags, maskHex: maskHex.toUpperCase() } satisfies Meta,
+    children: flags.map(f => ({
+      key: `L${i}:${name}#${f.name}`,
+      meta: { kind: 'flagBit', layerIndex: i, fieldName: name, value: setNames, flag: f, br } satisfies Meta,
+      isLeaf: true,
+    })),
     isLeaf: false,
-  }))
-})
+  }
+}
 
 function renderLabel({ option }: { option: any }) {
   const meta = option.meta as Meta
@@ -141,6 +290,39 @@ function renderLabel({ option }: { option: any }) {
       h('span', { class: 'swatch', style: { background: layerColor(meta.layerIndex) } }),
       h('span', { class: 'lsummary' }, layerSummary(l)),
       h('span', { class: 'loff mono' }, `@${l.offset} · ${l.headerLen} B`),
+    ])
+  }
+  if (meta.kind === 'namedGroup') {
+    return h('span', { class: 'field-row group-row' }, [
+      h('span', { class: 'fname' }, cap(meta.fieldName ?? '') + ':'),
+      h('span', { class: 'fvalue num' }, '0x' + meta.maskHex),
+      h('span', { class: 'count-badge' }, `${meta.value} 项`),
+    ])
+  }
+  if (meta.kind === 'entityGroup') {
+    const obj = meta.value as Record<string, unknown>
+    return h('span', { class: 'field-row group-row' }, [
+      h('span', { class: 'fname' }, cap(meta.fieldName ?? '') + ':'),
+      h('span', { class: 'count-badge' }, `${Object.keys(obj).length} 项`),
+    ])
+  }
+  if (meta.kind === 'flagGroup') {
+    const set = meta.value as string[]
+    return h('span', { class: 'field-row group-row' }, [
+      h('span', { class: 'fname' }, cap(meta.fieldName ?? '') + ':'),
+      h('span', { class: 'fvalue num' }, '0x' + meta.maskHex),
+      h('span', { class: 'count-badge' }, set.length ? set.join(',') : '无置位'),
+    ])
+  }
+  if (meta.kind === 'flagBit') {
+    const f = meta.flag!
+    const isSet = (meta.value as string[]).includes(f.name)
+    const bits = flagBitPattern(packet.value!.hex, meta.br, f.mask)
+    return h('span', { class: 'field-row elem-field' }, [
+      bits ? h('span', { class: 'bits mono' }, `${bits} =`) : null,
+      h('span', { class: 'fname' }, cap(f.name)),
+      h('span', { class: 'fvalue num', style: isSet ? 'color:#57ab5a' : 'color:#8b949e' },
+        isSet ? 'Set: True' : 'Set: False'),
     ])
   }
   if (meta.kind === 'listGroup') {
@@ -165,7 +347,7 @@ function renderLabel({ option }: { option: any }) {
   const bits = isElemField ? null : bitPattern(meta.layerIndex, name)
   return h('span', { class: `field-row${isElemField ? ' elem-field' : ''}` }, [
     bits ? h('span', { class: 'bits mono', title: '字段在字节内的位分布' }, `${bits} =`) : null,
-    h('span', { class: 'fname' }, cap(name)),
+    h('span', { class: 'fname' }, displayLabel(meta.layerIndex, name)),
     h('span', { class: 'fvalue num', title: maybeUpperHex(fmtValue(meta.value)) }, shortValue(meta.value)),
     h('button', {
       class: 'copy-btn',
@@ -218,6 +400,39 @@ const rangesIndex = computed<RangeEntry[]>(() => {
       out.push({ key: `L${i}:${name}`, start: r[0], end: r[1] })
     }
   })
+  // 组节点区间:命名组取注解声明的字节跨度;实体组父节点高亮字段自身区间
+  for (const ln of treeData.value) {
+    const l = p.layers[ln.meta.layerIndex]!
+    for (const c of ln.children ?? []) {
+      const m = c.meta
+      if (m.kind === 'namedGroup' && m.startByte !== undefined && m.endByte !== undefined && m.endByte >= 0) {
+        out.push({ key: c.key, start: m.startByte, end: m.endByte + 1 })
+      } else if (m.kind === 'entityGroup' && m.fieldName) {
+        const r = l.ranges?.[m.fieldName]
+        if (r) out.push({ key: c.key, start: r[0], end: r[1] })
+      } else if (m.kind === 'flagGroup' && m.fieldName) {
+        const br = l.bitRanges?.[m.fieldName]
+        if (br) {
+          out.push({ key: c.key, start: br[0] >> 3, end: ((br[1] - 1) >> 3) + 1 })
+          for (const fb of c.children ?? []) {
+            out.push({ key: fb.key, start: br[0] >> 3, end: ((br[1] - 1) >> 3) + 1 })
+          }
+        }
+      }
+    }
+  }
+  return out
+})
+
+/** 子节点 → 父节点 key(点字节反查字段时展开祖先)。 */
+const parentByKey = computed<Map<string, string>>(() => {
+  const out = new Map<string, string>()
+  for (const ln of treeData.value) {
+    for (const c of ln.children ?? []) {
+      out.set(c.key, ln.key)
+      for (const gc of c.children ?? []) out.set(gc.key, c.key)
+    }
+  }
   return out
 })
 
@@ -278,9 +493,11 @@ function onByteClick(idx: number) {
   }
   const best = hits.reduce((a, b) => (b.end - b.start < a.end - a.start ? b : a))
   const layerKey = best.key.split(':')[0]!
-  if (!expandedKeys.value.includes(layerKey)) {
-    expandedKeys.value = [...expandedKeys.value, layerKey]
-  }
+  const expand = new Set([layerKey])
+  // 展开完整祖先链(命名组/标志组的子字段可能藏在折叠组里)
+  let cur: string | undefined = best.key
+  while ((cur = parentByKey.value.get(cur))) expand.add(cur)
+  expandedKeys.value = [...new Set([...expandedKeys.value, ...expand])]
   applySelection(best.key)
   scrollTreeToSelection()
 }
@@ -288,7 +505,17 @@ function onByteClick(idx: number) {
 watch(packet, p => {
   selectedKeys.value = []
   highlight.value = null
-  expandedKeys.value = p ? p.layers.map((_, i) => `L${i}`) : []
+  const keys = p ? p.layers.map((_, i) => `L${i}`) : []
+  // 命名组/标志组/实体组默认展开
+  if (p) {
+    for (const ln of treeData.value) {
+      for (const c of ln.children ?? []) {
+        const m = c.meta
+        if (m.kind === 'namedGroup' || m.kind === 'flagGroup' || m.kind === 'entityGroup') keys.push(c.key)
+      }
+    }
+  }
+  expandedKeys.value = keys
 }, { immediate: true })
 </script>
 
@@ -308,6 +535,7 @@ watch(packet, p => {
     <div class="pane-body">
       <div class="tree-side">
         <n-tree
+          :key="packet.seq"
           :data="treeData"
           :cancelable="false"
           :selected-keys="selectedKeys"
@@ -385,10 +613,13 @@ watch(packet, p => {
 :deep(.copy-btn.ok) { color: #57ab5a; }
 
 /* 选中效果:内容宽度内的圆角轻底 + 左侧细强调条(不做通栏色块) */
-:deep(.n-tree-node-content) { border-radius: 3px; padding-right: 8px; }
+:deep(.n-tree) { --n-node-height: 20px; }
+:deep(.n-tree-node) { padding: 0 !important; height: 20px !important; min-height: 0 !important; }
+:deep(.n-tree-node-content) { border-radius: 3px; padding: 0 8px 0 4px !important; line-height: 20px; }
 :deep(.n-tree-node-content:hover) { background: rgba(177, 186, 196, .07); }
 :deep(.n-tree-node--selected > .n-tree-node-content) {
   background: rgba(83, 155, 245, .18) !important;
+  border-radius: 0 3px 3px 0;
   box-shadow: inset 2px 0 0 #539bf5;
 }
 :deep(.n-tree-node--selected .fname),

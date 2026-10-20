@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NButton, NInput, NSelect, NTooltip, useMessage } from 'naive-ui'
-import { Play, Square, SendHorizontal, Trash2 } from 'lucide-vue-next'
+import { Download, Play, SendHorizontal, Square, Trash2, Upload } from 'lucide-vue-next'
 import { api } from '../api'
 import { clearPackets, refreshStatus, store } from '../store'
 
 const message = useMessage()
 const switching = ref(false)
+const importing = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 const ifaceOptions = computed(() =>
   store.interfaces.map(i => ({ label: (i.description || i.name).slice(0, 64), value: i.name })))
@@ -33,6 +35,28 @@ async function stop() {
     message.error((e as Error).message)
   } finally {
     switching.value = false
+  }
+}
+
+/** 导出环形缓冲:Content-Disposition 触发浏览器下载 .pcap(Wireshark 可直接打开)。 */
+function exportPcap() {
+  window.location.href = '/api/netproto/export'
+}
+
+/** 导入 pcap:逐帧进解析管线,SSE 实时显示;时间戳还原文件内原始值。 */
+async function onImportFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''   // 允许再次选择同一文件
+  if (!file) return
+  importing.value = true
+  try {
+    const r = await api.importPcap(file)
+    message.success(`已导入 ${r.imported} 帧`)
+  } catch (err) {
+    message.error(`导入失败:${(err as Error).message}`, { keepAliveOnHover: true, duration: 5000 })
+  } finally {
+    importing.value = false
   }
 }
 </script>
@@ -68,6 +92,25 @@ async function stop() {
       <template #icon><SendHorizontal :size="13" /></template>
       发包
     </n-button>
+
+    <n-tooltip trigger="hover">
+      <template #trigger>
+        <n-button size="small" quaternary :disabled="store.captured === 0" @click="exportPcap">
+          <template #icon><Download :size="13" /></template>
+        </n-button>
+      </template>
+      导出 .pcap(Wireshark 可打开)
+    </n-tooltip>
+    <n-tooltip trigger="hover">
+      <template #trigger>
+        <n-button size="small" quaternary :loading="importing" @click="fileInput?.click()">
+          <template #icon><Upload :size="13" /></template>
+        </n-button>
+      </template>
+      导入 .pcap
+    </n-tooltip>
+    <input ref="fileInput" type="file" accept=".pcap" hidden @change="onImportFile" />
+
     <n-tooltip trigger="hover">
       <template #trigger>
         <n-button size="small" quaternary @click="clearPackets">

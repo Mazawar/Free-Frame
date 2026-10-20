@@ -51,6 +51,9 @@ public final class LayerViews {
             return null;
         }
         if (value instanceof byte[] bytes) {
+            if (name.endsWith("Ip6") && bytes.length == 16) {
+                return formatIpv6(bytes);      // RFC 5952 压缩形式,如 fe80::1
+            }
             return hex(bytes, 2048);
         }
         if (value instanceof UnknownEnumValue u) {
@@ -118,5 +121,46 @@ public final class LayerViews {
 
     public static String formatIp(int ip) {
         return ((ip >> 24) & 0xFF) + "." + ((ip >> 16) & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + (ip & 0xFF);
+    }
+
+    /** IPv6 文本(RFC 5952):最长零段(≥2)压缩为 ::,小写 hex。 */
+    public static String formatIpv6(byte[] b) {
+        long[] g = new long[8];
+        for (int i = 0; i < 8; i++) {
+            g[i] = ((b[i * 2] & 0xFFL) << 8) | (b[i * 2 + 1] & 0xFFL);
+        }
+        int bestStart = -1, bestLen = 0;
+        for (int i = 0; i < 8; ) {
+            if (g[i] != 0) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < 8 && g[j] == 0) {
+                j++;
+            }
+            if (j - i > bestLen) {
+                bestStart = i;
+                bestLen = j - i;
+            }
+            i = j;
+        }
+        if (bestLen < 2) {
+            bestStart = -1;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            if (bestStart >= 0 && i >= bestStart && i < bestStart + bestLen) {
+                if (i == bestStart) {
+                    sb.append("::");
+                }
+                continue;
+            }
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ':') {
+                sb.append(':');
+            }
+            sb.append(Long.toHexString(g[i]));
+        }
+        return sb.length() == 0 ? "::" : sb.toString();
     }
 }

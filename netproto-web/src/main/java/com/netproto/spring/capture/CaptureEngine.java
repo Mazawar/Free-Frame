@@ -111,15 +111,24 @@ public class CaptureEngine {
         }
     }
 
-    /** 注入一帧原始字节:走完整「解析 → 环形缓冲 → 订阅者推送」管线,不依赖采集运行状态。 */
+    /** 注入一帧原始字节(到达时间取当前时刻):走完整「解析 → 环形缓冲 → 订阅者推送」管线。 */
     public void inject(String iface, byte[] raw) {
-        accept(iface, raw);
+        inject(iface, raw, System.currentTimeMillis());
+    }
+
+    /** 注入并指定时间戳(pcap 导入用:还原文件内的原始捕获时间)。 */
+    public void inject(String iface, byte[] raw, long tsMillis) {
+        accept(iface, raw, tsMillis);
     }
 
     /** 解析一帧并广播(包内可见,测试用)。 */
     void accept(String iface, byte[] raw) {
+        accept(iface, raw, System.currentTimeMillis());
+    }
+
+    void accept(String iface, byte[] raw, long tsMillis) {
         int seq = captured.incrementAndGet();
-        DecodedPacket packet = decoder.decode(raw, iface, System.currentTimeMillis(), seq);
+        DecodedPacket packet = decoder.decode(raw, iface, tsMillis, seq);
         synchronized (ring) {
             ring.addLast(packet);
             while (ring.size() > ringSize) {

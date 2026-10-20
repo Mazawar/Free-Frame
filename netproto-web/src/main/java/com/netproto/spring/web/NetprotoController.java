@@ -4,6 +4,7 @@ import com.netproto.annotation.Protocol;
 import com.netproto.annotation.ProtocolField;
 import com.netproto.spring.capture.CaptureEngine;
 import com.netproto.spring.capture.NetIfaces;
+import com.netproto.spring.capture.PcapFile;
 import com.netproto.spring.capture.RawSender;
 import com.netproto.stack.DecodedPacket;
 import com.netproto.stack.ProtocolRegistry;
@@ -13,13 +14,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -90,7 +98,8 @@ public class NetprotoController {
             String category;
             if (elementClasses.contains(e.type())) {
                 category = "element";
-            } else if (e.type().isAnnotationPresent(com.netproto.annotation.BindOn.class)
+                // 可重复 @BindOn 多实例时 isAnnotationPresent 返回 false,须用 getAnnotationsByType
+            } else if (e.type().getAnnotationsByType(com.netproto.annotation.BindOn.class).length > 0
                     || parentIds.contains(e.id())) {
                 category = "stack";
             } else {
@@ -126,6 +135,24 @@ public class NetprotoController {
             m.put("order", ann.order());
             m.put("size", ann.size());
             m.put("type", f.getType().getSimpleName());
+            if (!ann.group().isEmpty()) {
+                m.put("group", ann.group());
+            }
+            if (!ann.label().isEmpty()) {
+                m.put("label", ann.label());
+            }
+            // 位标志字段:暴露每个标志的掩码(Wireshark 式逐位展开的依据),按掩码降序 = 树中高位在前
+            if (ann.flagClass() != void.class) {
+                List<Map<String, Object>> flags = new ArrayList<>();
+                for (Object c : ann.flagClass().getEnumConstants()) {
+                    if (c instanceof com.netproto.core.ProtocolFlag pf) {
+                        flags.add(Map.of("name", ((Enum<?>) c).name(), "mask", pf.mask()));
+                    }
+                }
+                flags.sort((a, b) -> Integer.compare((Integer) b.get("mask"), (Integer) a.get("mask")));
+                m.put("flagClass", ann.flagClass().getSimpleName());
+                m.put("flags", flags);
+            }
             fields.add(m);
         }
         fields.sort(Comparator.comparingInt(m -> (Integer) m.get("order")));
@@ -176,37 +203,66 @@ public class NetprotoController {
         return out;
     }
 
-    /** SSE 保活:定期发注释事件,防止代理/浏览器把空闲连接掐断。 */
-    private final java.util.concurrent.ScheduledExecutorService sseKeepalive =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+    /** SSE 保活调度:只往各连接队列投 keepalive 标记,实际发送由各连接的写线程完成。 */
+    private final ScheduledExecutorService sseKeepalive =
+            Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "netproto-sse-keepalive");
                 t.setDaemon(true);
                 return t;
             });
 
-    /** SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发 keepalive 注释)。 */
+    private static final Object KEEPALIVE = new Object();
+
+    /**
+     * SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发具名 ping 事件)。
+     * <p>
+     * 发送绝不跑在抓包线程上:监听器只往有界队列投递,每连接一个单写线程串行发送
+     * (包 + ping 同通道,SseEmitter 并发 send 非线程安全)。队列满则丢弃本连接的
+     * 新帧——冻结/慢速的浏览器只丢自己的画面,不会把背压传导回采集管线。
+     * <p>
+     * ping 是具名事件(非注释):前端可见并以此驱动看门狗——连接因任何原因静默
+     * (半开 socket/清理竞态/中间层吞流)超过两个周期,浏览器强制断开重连,自愈。
+     */
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
         SseEmitter emitter = new SseEmitter(0L);
-        Consumer<DecodedPacket> listener = p -> {
-            try {
-                emitter.send(SseEmitter.event().name("packet")
-                        .data(objectMapper.writeValueAsString(toJson(p)), MediaType.APPLICATION_JSON));
-            } catch (IOException e) {
-                emitter.completeWithError(e);
-            }
-        };
-        java.util.concurrent.ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(() -> {
-            try {
-                emitter.send(SseEmitter.event().comment("keepalive"));
-            } catch (Exception e) {
-                emitter.completeWithError(e);
-            }
-        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        BlockingQueue<Object> queue = new ArrayBlockingQueue<>(512);
+        var writer = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "netproto-sse-writer");
+            t.setDaemon(true);
+            return t;
+        });
+        ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(
+                () -> queue.offer(KEEPALIVE), 15, 15, TimeUnit.SECONDS);
+        Consumer<DecodedPacket> listener = queue::offer;
+        var closed = new java.util.concurrent.atomic.AtomicBoolean(false);
         Runnable cleanup = () -> {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
             capture.removeListener(listener);
             ping.cancel(false);
+            writer.shutdownNow();
         };
+        writer.execute(() -> {
+            try {
+                while (true) {
+                    Object item = queue.take();
+                    if (item instanceof DecodedPacket p) {
+                        emitter.send(SseEmitter.event().name("packet")
+                                .data(objectMapper.writeValueAsString(toJson(p)), MediaType.APPLICATION_JSON));
+                    } else {
+                        emitter.send(SseEmitter.event().name("ping"));
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();   // 清理路径:连接关闭,正常退出
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            } finally {
+                cleanup.run();
+            }
+        });
         capture.addListener(listener);
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
@@ -217,6 +273,12 @@ public class NetprotoController {
     @jakarta.annotation.PreDestroy
     void shutdownKeepalive() {
         sseKeepalive.shutdownNow();
+    }
+
+    /** 参数/文件校验类错误 → 400 + 明确原因(如 pcap 导入的非法文件信息)。 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> badRequest(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
     }
 
     // ---- 报文注入(不经过网卡:直接进解析+展示管线) ----
@@ -238,6 +300,35 @@ public class NetprotoController {
         }
         capture.inject(body.getOrDefault("iface", "inject"), raw);
         return Map.of("status", "injected", "bytes", raw.length);
+    }
+
+    // ---- pcap 导出/导入(与 tcpdump/Wireshark 互通) ----
+
+    /** 导出环形缓冲(最近 ring-size 帧,旧→新)为标准 pcap,Ethernet 链路。 */
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportPcap() {
+        List<DecodedPacket> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
+        List<PcapFile.Record> records = new ArrayList<>(newest.size());
+        for (int i = newest.size() - 1; i >= 0; i--) {
+            DecodedPacket p = newest.get(i);
+            records.add(new PcapFile.Record(p.timestampMillis(), p.raw()));
+        }
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header("Content-Disposition", "attachment; filename=netproto-export.pcap")
+                .body(PcapFile.write(records));
+    }
+
+    /** 导入 pcap(仅以太网链路):逐帧走「解析 → 缓冲 → SSE」管线,时间戳取文件内原始值。 */
+    @PostMapping("/import")
+    public Map<String, Object> importPcap(@RequestParam("file") MultipartFile file) throws IOException {
+        List<PcapFile.Record> records = PcapFile.read(file.getBytes());
+        String source = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                ? "import" : file.getOriginalFilename();
+        for (PcapFile.Record r : records) {
+            capture.inject(source, r.raw(), r.tsMillis());
+        }
+        return Map.of("imported", records.size());
     }
 
     // ---- 发包(原始以太网注入) ----
@@ -344,7 +435,11 @@ public class NetprotoController {
             lm.put("name", l.name());
             lm.put("offset", l.offset());
             lm.put("headerLen", l.headerLength());
-            lm.put("fields", LayerViews.fieldsOf(l.packet()));
+            // 只输出真实解析到的字段:presentIf 缺席的字段引擎不读字节、无区间,
+            // 对象里留的是 Java 默认值(0/空串),展示出来是假值
+            Map<String, Object> fields = LayerViews.fieldsOf(l.packet());
+            fields.keySet().removeIf(k -> !l.fieldRanges().containsKey(k));
+            lm.put("fields", fields);
             lm.put("ranges", l.fieldRanges());
             lm.put("bitRanges", l.bitRanges());
             layers.add(lm);

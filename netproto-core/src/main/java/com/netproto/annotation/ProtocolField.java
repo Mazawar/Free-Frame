@@ -83,4 +83,11 @@ public @interface ProtocolField {
     /** 字段级逃生舱(L2):自定义编解码器(必须实现 FieldCodec 且有无参构造)。
      *  指定后该字段的读写/尺寸完全由其接管,与 size/lengthField 互斥。 */
     Class<?> custom() default void.class;
+
+    /** 展示分组名(Wireshark 式命名组,如 "Flags"/"Connect Flags"):同组字段在观测页折叠为
+     *  一个带名父节点。约束(注册期校验):同组字段按 order 相邻,位宽总和按字节对齐。 */
+    String group() default "";
+
+    /** 展示名(Wireshark 式字段名,如 "Time To Live");空 = 用字段名。只影响展示,不影响绑定/过滤。 */
+    String label() default "";
 }

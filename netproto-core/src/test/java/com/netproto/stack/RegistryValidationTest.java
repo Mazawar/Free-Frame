@@ -47,7 +47,34 @@ class RegistryValidationTest {
         return ProtocolRegistry.create(all);
     }
 
+        @Test
+    void adjacentAlignedGroupRegisters() {
+        ProtocolRegistry r = fullRegistry(GroupOk.class);
+        assertNotNull(r.get("group-ok"));
+    }
+
     @Test
+    void groupMembersMustBeAdjacent() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> fullRegistry(GroupGap.class));
+        assertTrue(e.getMessage().contains("must be adjacent"));
+    }
+
+    @Test
+    void groupTotalWidthMustBeByteAligned() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> fullRegistry(GroupUnaligned.class));
+        assertTrue(e.getMessage().contains("not byte-aligned"));
+    }
+
+    @Test
+    void groupMembersMustHaveFixedSize() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> fullRegistry(GroupVariable.class));
+        assertTrue(e.getMessage().contains("fixed size"));
+    }
+
+@Test
     void duplicateIdFails() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> ProtocolRegistry.create(DupA.class, DupB.class));
@@ -115,6 +142,35 @@ class RegistryValidationTest {
         assertEquals(0x5A, decoded.marker);
         assertArrayEquals(new byte[]{0x5A}, codec.encode(decoded));
         assertEquals(1, codec.headerBytes());
+    }
+
+
+    // ---- 展示分组(@ProtocolField#group)fixture ----
+
+    @Protocol(id = "group-ok")
+    static class GroupOk {
+        @ProtocolField(order = 1, size = 8) private int a;
+        @ProtocolField(order = 2, size = 4, group = "Flags") private int f1;
+        @ProtocolField(order = 3, size = 4, group = "Flags") private int f2;
+    }
+
+    @Protocol(id = "group-gap")
+    static class GroupGap {
+        @ProtocolField(order = 1, size = 4, group = "G") private int a;
+        @ProtocolField(order = 2, size = 8) private int mid;
+        @ProtocolField(order = 3, size = 4, group = "G") private int b;
+    }
+
+    @Protocol(id = "group-unaligned")
+    static class GroupUnaligned {
+        @ProtocolField(order = 1, size = 3, group = "G") private int a;
+        @ProtocolField(order = 2, size = 3, group = "G") private int b;
+    }
+
+    @Protocol(id = "group-variable")
+    static class GroupVariable {
+        @ProtocolField(order = 1, size = 4, group = "G") private int a;
+        @ProtocolField(order = 2, group = "G") private int b;
     }
 
     // ---- L3 逃生舱 fixture ----

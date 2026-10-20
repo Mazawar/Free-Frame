@@ -61,8 +61,43 @@ public final class ProtocolRegistry {
         } else {
             codec = new ProtocolCodec<>(clazz);
         }
+        validateFieldGroups(ann.id(), clazz);
         byId.put(ann.id(), new Entry(ann.id(),
                 ann.name().isEmpty() ? ann.id() : ann.name(), ann.builtin(), clazz, codec));
+    }
+
+    /**
+     * 展示分组(@ProtocolField#group)静态校验:同组字段按 order 相邻、位宽总和按字节对齐。
+     * 分组只影响观测页展示,不影响编解码;违规在启动期失败(与绑定校验同一时机语义)。
+     */
+    private void validateFieldGroups(String protocolId, Class<?> clazz) {
+        record F(int order, int size, String group, String name) {}
+        List<F> fields = new java.util.ArrayList<>();
+        for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
+            ProtocolField pf = f.getAnnotation(ProtocolField.class);
+            if (pf != null) {
+                fields.add(new F(pf.order(), pf.size(), pf.group(), f.getName()));
+            }
+        }
+        fields.sort(Comparator.comparingInt(F::order));
+        for (String group : fields.stream().map(F::group).filter(g -> !g.isEmpty()).distinct().toList()) {
+            List<F> members = fields.stream().filter(f -> f.group().equals(group)).toList();
+            int first = fields.indexOf(members.get(0));
+            int last = fields.indexOf(members.get(members.size() - 1));
+            if (last - first != members.size() - 1) {
+                throw new IllegalArgumentException("protocol '" + protocolId + "' group '" + group
+                        + "' fields must be adjacent by order (got " + members.stream().map(F::name).toList() + ")");
+            }
+            int bits = members.stream().mapToInt(F::size).sum();
+            if (members.stream().anyMatch(f -> f.size() < 0)) {
+                throw new IllegalArgumentException("protocol '" + protocolId + "' group '" + group
+                        + "' members must have fixed size (got " + members.stream().map(F::name).toList() + ")");
+            }
+            if (bits % 8 != 0) {
+                throw new IllegalArgumentException("protocol '" + protocolId + "' group '" + group
+                        + "' total width " + bits + " bit is not byte-aligned");
+            }
+        }
     }
 
     /** 全部注册后校验绑定关系并构建分派树(未知父/未知 when 标识符 → 启动失败)。 */

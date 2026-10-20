@@ -66,10 +66,20 @@ const themeOverrides: GlobalThemeOverrides = {
 
 onMounted(async () => {
   connectStream()
-  await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
-  // 无论是否在采集,都恢复环形缓冲里的最近帧(停止/刷新后不丢上下文);单批一次进 store
+  // 配置先行:缓冲上限等显示参数以它为准,恢复裁剪依赖 maxPackets
   try {
-    const recent = await api.packets(200)
+    const c = await api.config()
+    store.config = {
+      ringSize: Number(c.ringSize) || 100_000,
+      ringBytes: Number(c.ringBytes) || 0,
+      snaplen: Number(c.snaplen) || 0,
+      rootProtocol: String(c.rootProtocol ?? ''),
+    }
+  } catch { /* 服务未起:用兜底默认 */ }
+  await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
+  // 恢复环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
+  try {
+    const recent = await api.packets(store.config.ringSize || 100_000)
     addPackets(recent.reverse())
   } catch { /* 服务未起 */ } finally {
     store.bootstrapped = true

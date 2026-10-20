@@ -50,6 +50,20 @@ export interface Packet {
   hex: string
 }
 
+export interface PacketSummary {
+  seq: number
+  ts: number
+  iface: string
+  len: number
+  path: string
+  layerIds: string[]
+  src: string
+  dst: string
+  srcPort: number | null
+  dstPort: number | null
+  info: string
+}
+
 export interface Iface {
   name: string
   description: string

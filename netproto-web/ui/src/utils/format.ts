@@ -1,4 +1,4 @@
-import type { Packet } from '../types'
+import type { Packet, PacketSummary } from '../types'
 
 /** 层着色:低饱和、深底可读(GitHub Dark 语法色系)。 */
 export const LAYER_COLORS = ['#79c0ff', '#d2a8ff', '#7ee787', '#ffa657', '#ff7b72', '#56d4dd']
@@ -20,60 +20,15 @@ export function fmtTime(ts: number): string {
 
 export interface Endpoints { src: string; dst: string }
 
-/** 提取五元组的源/目的:ipv4/ipv6 → arp → ethernet 兜底。 */
-export function endpoints(p: Packet): Endpoints {
-  const ip = p.layers.find(l => l.id === 'ipv4' || l.id === 'ipv6')
-  if (ip) {
-    const src = ip.fields.sourceIp ?? ip.fields.srcIp6
-    const dst = ip.fields.destinationIp ?? ip.fields.dstIp6
-    if (src != null) return { src: String(src), dst: String(dst ?? '?') }
-  }
-  const arp = p.layers.find(l => l.id === 'arp')
-  if (arp) return { src: String(arp.fields.senderIp ?? '?'), dst: String(arp.fields.targetIp ?? '?') }
-  const eth = p.layers.find(l => l.id === 'ethernet')
-  if (eth) return { src: String(eth.fields.srcMac ?? '-'), dst: String(eth.fields.dstMac ?? '-') }
-  return { src: '-', dst: '-' }
+/** 源/目的:摘要已由后端按 ipv4/ipv6 → arp → ethernet 优先级提取。 */
+export function endpoints(p: PacketSummary): Endpoints {
+  return { src: p.src, dst: p.dst }
 }
 
-/** 最深一层协议 id(列表"协议"列)。 */
-export function protocolOf(p: Packet): { id: string; index: number } {
-  const i = p.layers.length - 1
-  return { id: p.layers[i]?.id ?? '-', index: i }
-}
-
-/** 信息列(Wireshark 风格)。 */
-export function info(p: Packet): string {
-  const tp = p.layers.find(l => l.id === 'udp' || l.id === 'tcp')
-  const app = p.layers[p.layers.length - 1]
-  if (tp) {
-    let s = `${tp.fields.srcPort} → ${tp.fields.dstPort}`
-    if (app && !['ethernet', 'ipv4', 'udp', 'tcp', 'icmp'].includes(app.id)) {
-      const tail = p.len - (app.offset + app.headerLen)
-      s += tail > 0 ? ` [${app.name},后续 ${tail} B 无已注册子协议]` : ` [${app.name}]`
-    }
-    return s
-  }
-  const arp = p.layers.find(l => l.id === 'arp')
-  if (arp) {
-    const op = Number(arp.fields.operation)
-    return op === 1
-      ? `Who has ${arp.fields.targetIp}? Tell ${arp.fields.senderIp}`
-      : `${arp.fields.senderIp} is at ${arp.fields.senderMac}`
-  }
-  const icmp = p.layers.find(l => l.id === 'icmp')
-  if (icmp) {
-    const t = Number(icmp.fields.type)
-    if (t === 8) return 'Echo (ping) request'
-    if (t === 0) return 'Echo (ping) reply'
-    return `type=${icmp.fields.type} code=${icmp.fields.code}`
-  }
-  // 兜底:最深层名;若其后仍有字节,显式提示「只解析已注册协议」机制停在此层
-  const last = p.layers[p.layers.length - 1]
-  if (last) {
-    const tail = p.len - (last.offset + last.headerLen)
-    return tail > 0 ? `${last.name}, 后续 ${tail} B 无已注册子协议` : last.name
-  }
-  return p.path
+/** 最深一层协议 id(列表"协议"列;组名映射由表格按协议元数据做)。 */
+export function protocolOf(p: PacketSummary): { id: string; index: number } {
+  const i = p.layerIds.length - 1
+  return { id: p.layerIds[i] ?? '-', index: i }
 }
 
 export interface HexRow {

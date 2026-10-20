@@ -8,7 +8,8 @@ import type { FieldMeta, FlagMeta, LayerView } from '../types'
 import HexView from './HexView.vue'
 
 const message = useMessage()
-const packet = computed(() => store.selected)
+/** 当前帧完整详情:选中时按需从 /packet/{seq} 拉取(摘要不常驻协议树)。 */
+const packet = computed(() => store.detail)
 const paneRef = ref<HTMLElement | null>(null)
 
 const selectedKeys = ref<string[]>([])

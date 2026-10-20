@@ -66,8 +66,11 @@ public class VarintCodec implements FieldCodec<Long> { /* read/write/sizeOf */ }
 
 ```
 @Protocol(id = "ipv4")  @BindOn(parent = "ethernet", when = "etherType == 0x0800")
+@Protocol(id = "ipv6")  @BindOn(parent = "ethernet", when = "etherType == 0x86DD")
 @Protocol(id = "udp")   @BindOn(parent = "ipv4",     when = "protocol == 17")
+                         @BindOn(parent = "ipv6",    when = "nextHeader == 17")
 @Protocol(id = "tcp")   @BindOn(parent = "ipv4",     when = "protocol == 6")
+                         @BindOn(parent = "ipv6",    when = "nextHeader == 6")
 @Protocol(id = "icmp")  @BindOn(parent = "ipv4",     when = "protocol == 1")
 @Protocol(id = "arp")   @BindOn(parent = "ethernet", when = "etherType == 0x0806")
 ```
@@ -109,6 +112,7 @@ POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原
 - Windows 采集/发包需要 **Npcap + 管理员权限**(libpcap 体系前提)。
 - raw TCP 注入无内核栈握手,仅演示/测试用途;UDP/TCP 校验和发 0(伪头属跨层信息,UDP 下合法,TCP 下演示边界)。
 - IP 分片重组、TCP 流重组是帧后处理器职责,本期未实现(`DecodedPacket` 消费者接口已预留)。
+- IPv6 只实现固定基本头:扩展头链(Hop-by-Hop/路由/分片…)不在分派树内,nextHeader 为扩展头类型时解析停在 ipv6 层;ICMPv6 校验和需伪头(跨层),组装置 0。
 - 发送帧不含 FCS(通常由驱动负责)。
 
 ## 测试
@@ -117,7 +121,7 @@ POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-102 个测试,按模块分布:core 56(引擎+栈,内联夹具)/ protocols 38(含 pcap4j parity 对照)/ spring-boot 2(装配扫描)/ demo 6(上下文+REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST。
+140 个测试,按模块分布:core 68(引擎+栈,内联夹具)/ protocols 44(含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)/ demo 18(真实协议 round-trip + 上下文 + REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及 Modbus/S7/DLT645/ISO8583/MQTT/Kafka 真实报文样例。
 
 ## 模块结构(按需引入)
 
@@ -125,11 +129,12 @@ POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原
 netproto-parent
 ├── netproto-core          注解 + 反射编解码引擎 + Expr 小语言 + 分派栈(Registry/Decoder/Encoder)
 │                          零依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
-├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/ipv4/icmp/udp/tcp)
-│                          + DNS/DHCP/IP 等 17 个协议定义,依赖 core
+├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/vlan/ipv4/ipv6/icmp/icmpv6/udp/tcp)
+│                          + DNS/DHCP/IP/TCP 扩展定义(模块共 24 个 @Protocol),依赖 core
 ├── netproto-web   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
 │                          + REST/SSE + 内置观测页面;protocols 为 optional(可自带协议栈)
-└── netproto-demo          演示/测试应用:全模块引入 + my-app/heartbeat 业务协议 + Spring Boot 入口
+└── netproto-demo          演示/测试应用:全模块引入 + 真实协议套件(Modbus/S7/DLT645/
+                           ISO8583/MQTT/Kafka)+ Spring Boot 入口
 ```
 
 按需引入示例:只做协议编解码 → `netproto-core`;要标准协议栈 → 加 `netproto-protocols`;
@@ -139,8 +144,8 @@ netproto-parent
 ## 目录结构
 
 ```
-netproto-core/     com.example.netproto.{annotation,core,stack}
-netproto-protocols/  com.example.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
-netproto-web/  com.example.netproto.spring.{config,capture,web} + static 观测页
-netproto-demo/     com.example.demo(DemoApplication + 业务协议示例)
+netproto-core/       com.netproto.{annotation,core,stack}
+netproto-protocols/  com.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
+netproto-web/        com.netproto.spring.{config,capture,web} + static 观测页(前端源码 ui/,Vite + TS)
+netproto-demo/       com.netproto.demo(DemoApplication + protocol.realworld 真实协议套件)
 ```

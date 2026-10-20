@@ -45,6 +45,7 @@ public class MyProtocol {
 | 元素内终止 | `sentinelOn + sentinelValue`(DNS 名标签) |
 | 计算字段 | `@ChecksumField` + 实体实现 `Checksum`(编码置 0 → 序列化 → 回写) |
 | 上下文钩子 | `DynamicSize`(尺寸)、`PayloadAware`(组装期长度) |
+| 展示元数据 | `label`(Wireshark 式字段名)、`group`(命名组,观测页折叠;注册期校验相邻+字节对齐) |
 
 **逃生舱**(覆盖"所有"协议的真正答案——加逃生舱,不加注解语法):
 
@@ -95,14 +96,17 @@ netproto:
 ## REST / SSE API
 
 ```
-GET  /api/netproto/protocols          # 注册协议 + 字段元数据
+GET  /api/netproto/protocols          # 注册协议 + 字段元数据(label/group/位标志)
 GET  /api/netproto/interfaces         # 网卡列表
 POST /api/netproto/capture/start      # {iface, bpf?}
 POST /api/netproto/capture/stop
 GET  /api/netproto/capture/status
 GET  /api/netproto/packets?limit=     # 最近帧(结构化)
 GET  /api/netproto/stream             # SSE 实时推送(事件名 packet)
+POST /api/netproto/inject             # {hex} 注入原始帧,走完整解析管线(不经过网卡)
 POST /api/netproto/send               # {iface, layers:[{protocol, fields}]} 原始以太网注入
+GET  /api/netproto/export             # 环形缓冲导出 .pcap(Wireshark 可打开)
+POST /api/netproto/import             # 导入 .pcap(multipart,仅以太网链路)
 ```
 
 发包 JSON 便捷格式:`byte[]` 字段给 hex 字符串;`*Mac` 字段给 `"aa:bb:cc:dd:ee:ff"`;`*Ip` 字段给点分十进制;选择子与长度字段自动填写。

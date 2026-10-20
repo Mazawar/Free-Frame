@@ -24,6 +24,8 @@ export interface LayerView {
   fields: Record<string, unknown>
   /** 顶层字段的帧绝对字节区间 [start, end),供树 ↔ 字节联动高亮。 */
   ranges: Record<string, [number, number]>
+  /** 帧绝对位区间 [startBit, endBit)(bit 0 = 首字节 MSB),亚字节字段位展示用。 */
+  bitRanges: Record<string, [number, number]>
 }
 
 export interface Packet {

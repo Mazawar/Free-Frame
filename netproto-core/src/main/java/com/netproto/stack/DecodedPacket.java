@@ -65,12 +65,22 @@ public final class DecodedPacket {
 
     /**
      * 一层解析结果。headerLength 为该层头部(payload 之前)的字节数;
-     * fieldRanges 为顶层字段的帧绝对字节区间 [start, end)(嵌套元素内部字段不含)。
+     * fieldRanges 为顶层字段的帧绝对字节区间 [start, end)(嵌套元素内部字段不含);
+     * bitRanges 为帧绝对位区间 [startBit, endBit)(bit 0 = 首字节 MSB),
+     * 供 UI 对亚字节字段做 Wireshark 式「0100 ....」位展示。
      */
     public record DecodedLayer(String id, String name, Object packet, int offset, int headerLength,
-                               java.util.Map<String, int[]> fieldRanges) {
+                               java.util.Map<String, int[]> fieldRanges,
+                               java.util.Map<String, int[]> bitRanges) {
         public DecodedLayer {
             fieldRanges = fieldRanges == null ? java.util.Map.of() : java.util.Map.copyOf(fieldRanges);
+            bitRanges = bitRanges == null ? java.util.Map.of() : java.util.Map.copyOf(bitRanges);
+        }
+
+        /** 兼容旧构造(无位区间)。 */
+        public DecodedLayer(String id, String name, Object packet, int offset, int headerLength,
+                            java.util.Map<String, int[]> fieldRanges) {
+            this(id, name, packet, offset, headerLength, fieldRanges, java.util.Map.of());
         }
     }
 }

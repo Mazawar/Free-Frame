@@ -47,8 +47,9 @@ public final class StackDecoder {
                 break;
             }
             int header = entry.codec().headerBytes();
-            // 位区间 → 帧绝对字节区间(供 UI 字段↔字节联动;解码线程内即刻取走,无并发问题)
+            // 位区间 → 帧绝对字节/位区间(供 UI 字段↔字节联动与亚字节位展示;解码线程内即刻取走)
             java.util.Map<String, int[]> fieldRanges = new java.util.LinkedHashMap<>();
+            java.util.Map<String, int[]> bitRanges = new java.util.LinkedHashMap<>();
             for (java.util.Map.Entry<String, int[]> fr : entry.codec().lastFieldRanges().entrySet()) {
                 int[] bits = fr.getValue();
                 int s = off + bits[0] / 8;
@@ -57,8 +58,10 @@ public final class StackDecoder {
                 if (t > s) {
                     fieldRanges.put(fr.getKey(), new int[]{s, t});
                 }
+                bitRanges.put(fr.getKey(), new int[]{off * 8 + bits[0], off * 8 + bits[1]});
             }
-            layers.add(new DecodedPacket.DecodedLayer(entry.id(), entry.name(), obj, off, header, fieldRanges));
+            layers.add(new DecodedPacket.DecodedLayer(entry.id(), entry.name(), obj, off, header,
+                    fieldRanges, bitRanges));
             if (header <= 0) {
                 break;  // 该 codec 不支持子层分派(叶子)
             }

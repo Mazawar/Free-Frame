@@ -11,6 +11,20 @@ const packet = computed(() => store.selected)
 const paneRef = ref<HTMLElement | null>(null)
 
 const selectedKeys = ref<string[]>([])
+
+/** 当前选中字段所属层(Wireshark 双层高亮的「层」:hex 中该层字节浅色铺底)。 */
+const selectedLayerIdx = computed(() => {
+  const m = /^L(\d+)/.exec(selectedKeys.value[0] ?? '')
+  return m ? Number(m[1]) : -1
+})
+
+const layerHighlight = computed<[number, number] | null>(() => {
+  const l = packet.value?.layers[selectedLayerIdx.value]
+  if (!l) return null
+  // 层字节 = 头部 + 该层 payload(与 Wireshark 选中协议行的高亮范围一致)
+  const end = Math.max(l.offset + l.headerLen, (l.ranges?.payload?.[1] ?? 0))
+  return [l.offset, end]
+})
 const expandedKeys = ref<string[]>([])
 const highlight = ref<[number, number] | null>(null)
 const copiedKey = ref('')
@@ -29,10 +43,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-/** 元素行摘要:对象元素取字段拼接,原始值直接格式化。 */
+/** 元素行摘要:对象元素取字段拼接(键首字母大写),原始值直接格式化。 */
 function elementSummary(v: unknown): string {
   if (isPlainObject(v)) {
-    const parts = Object.entries(v).map(([k, e]) => `${k}=${shortRaw(e)}`)
+    const parts = Object.entries(v).map(([k, e]) => `${cap(k)}=${shortRaw(e)}`)
     const s = parts.join(', ')
     return s.length > 52 ? s.slice(0, 52) + '…' : s
   }
@@ -53,6 +67,34 @@ function shortValue(v: unknown): string {
 /** 纯 hex 字符串(偶数长、仅 0-9a-f)按 hex 语义显示为大写。 */
 function maybeUpperHex(s: string): string {
   return s.length >= 8 && /^[0-9a-f]+$/.test(s) ? s.toUpperCase() : s
+}
+
+/** 属性名首字母大写(Wireshark 风格),复制仍用原名。 */
+function cap(s: string): string {
+  return s ? s[0]!.toUpperCase() + s.slice(1) : s
+}
+
+/**
+ * 亚字节字段的位展示(Wireshark 式):字段所在字节的 8 位,
+ * 字段位显 0/1、其余位为「.」,如 version(4bit) → "0100 ...."。
+ * 仅顶层字段有位区间;字节对齐或跨字节字段返回 null(走普通展示)。
+ */
+function bitPattern(layerIndex: number, fieldName: string): string | null {
+  const l = packet.value?.layers[layerIndex]
+  const br = l?.bitRanges?.[fieldName]
+  if (!br) return null
+  const len = br[1] - br[0]
+  const startByte = br[0] >> 3
+  const endByte = (br[1] - 1) >> 3
+  if (len >= 8 && br[0] % 8 === 0) return null          // 字节对齐:普通展示
+  if (startByte !== endByte) return null                 // 跨字节:暂不做跨字节位图
+  const byteVal = parseInt(packet.value!.hex.substr(startByte * 2, 2), 16)
+  let bits = ''
+  for (let j = 0; j < 8; j++) {
+    const g = startByte * 8 + j
+    bits += g >= br[0] && g < br[1] ? String((byteVal >> (7 - j)) & 1) : '.'
+  }
+  return `${bits.slice(0, 4)} ${bits.slice(4)}`
 }
 
 const treeData = computed(() => {
@@ -93,7 +135,9 @@ function renderLabel({ option }: { option: any }) {
   const meta = option.meta as Meta
   if (meta.kind === 'layer') {
     const l = packet.value!.layers[meta.layerIndex]!
-    return h('span', { class: 'layer-row' }, [
+    // 选中该层任一字段时,层行同步点亮(Wireshark 的双层选中:层行 + 字段行)
+    const active = meta.layerIndex === selectedLayerIdx.value
+    return h('span', { class: `layer-row${active ? ' layer-active' : ''}` }, [
       h('span', { class: 'swatch', style: { background: layerColor(meta.layerIndex) } }),
       h('span', { class: 'lsummary' }, layerSummary(l)),
       h('span', { class: 'loff mono' }, `@${l.offset} · ${l.headerLen} B`),
@@ -101,7 +145,7 @@ function renderLabel({ option }: { option: any }) {
   }
   if (meta.kind === 'listGroup') {
     return h('span', { class: 'field-row group-row' }, [
-      h('span', { class: 'fname' }, meta.fieldName ?? ''),
+      h('span', { class: 'fname' }, cap(meta.fieldName ?? '')),
       h('span', { class: 'count-badge' }, `${(meta.value as unknown[]).length} 项`),
     ])
   }
@@ -118,8 +162,10 @@ function renderLabel({ option }: { option: any }) {
   }
   const name = meta.fieldName ?? ''
   const isElemField = meta.kind === 'elementField'
+  const bits = isElemField ? null : bitPattern(meta.layerIndex, name)
   return h('span', { class: `field-row${isElemField ? ' elem-field' : ''}` }, [
-    h('span', { class: 'fname' }, name),
+    bits ? h('span', { class: 'bits mono', title: '字段在字节内的位分布' }, `${bits} =`) : null,
+    h('span', { class: 'fname' }, cap(name)),
     h('span', { class: 'fvalue num', title: maybeUpperHex(fmtValue(meta.value)) }, shortValue(meta.value)),
     h('button', {
       class: 'copy-btn',
@@ -276,7 +322,7 @@ watch(packet, p => {
           <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
           <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
         </div>
-        <HexView :packet="packet" :highlight="highlight" @byte-click="onByteClick" />
+        <HexView :packet="packet" :highlight="highlight" :layer-hl="layerHighlight" @byte-click="onByteClick" />
       </div>
     </div>
   </section>
@@ -318,6 +364,8 @@ watch(packet, p => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 :deep(.loff) { color: #6e7681; font-size: 11px; flex-shrink: 0; }
+:deep(.bits) { color: #8b949e; font-size: 11px; flex-shrink: 0; }
+:deep(.layer-active .lsummary) { color: #79b8ff; }
 :deep(.field-row) { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 :deep(.fname) { color: #8b949e; font-size: 12px; }
 :deep(.fvalue) {

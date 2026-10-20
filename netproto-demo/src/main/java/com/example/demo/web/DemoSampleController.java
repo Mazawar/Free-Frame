@@ -1,6 +1,6 @@
 package com.example.demo.web;
 
-import com.example.demo.protocol.biz.PrivateSamples;
+import com.example.demo.protocol.realworld.RealWorldSamples;
 import com.example.netproto.spring.capture.CaptureEngine;
 import com.example.netproto.stack.StackEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,43 +11,39 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 私有协议族演示端点:组装三种形态(XETH 直挂以太网 / GXTP over UDP / MTALK over TCP)
- * 的样例报文并注入解析管线 —— 无需真实流量,页面即可看到完整解析效果。
+ * 真实协议样例注入端点:组装 Modbus TCP / S7comm / MQTT / Kafka 的完整以太网帧
+ * 并注入解析管线,页面无需真实流量即可看到解析效果。
+ * DL/T 645 与 ISO 8583 为串口/裸流孤岛协议(无以太网帧形态),不在注入之列。
  */
 @RestController
 @RequestMapping("/api/demo")
 public class DemoSampleController {
 
     private final CaptureEngine capture;
-    private final PrivateSamples samples;
+    private final RealWorldSamples samples;
 
     public DemoSampleController(CaptureEngine capture, StackEncoder encoder) {
         this.capture = capture;
-        this.samples = new PrivateSamples(encoder);
+        this.samples = new RealWorldSamples(encoder);
     }
 
-    /** 注入全部 8 个私有协议样例帧,返回各帧长度。 */
+    /** 注入全部 6 帧真实协议样例,返回各帧长度。 */
     @PostMapping("/samples")
     public Map<String, Object> injectSamples() {
         Map<String, Integer> frames = new LinkedHashMap<>();
-        frames.put("xeth-telemetry", samples.xethTelemetry().length);
-        frames.put("xeth-alarm", samples.xethAlarm().length);
-        frames.put("gxtp-login", samples.gxLogin().length);
-        frames.put("gxtp-telemetry", samples.gxTelemetry().length);
-        frames.put("gxtp-config", samples.gxConfig().length);
-        frames.put("gxtp-file-chunk", samples.gxFileChunk().length);
-        frames.put("mtalk-hello", samples.mtalkHello().length);
-        frames.put("mtalk-events", samples.mtalkEvents().length);
+        frames.put("modbus-read-resp", samples.modbusReadResp().length);
+        frames.put("modbus-write-multi", samples.modbusWriteMulti().length);
+        frames.put("s7-read-job", samples.s7ReadJob().length);
+        frames.put("s7-ack-data", samples.s7AckData().length);
+        frames.put("mqtt-connect", samples.mqttConnect().length);
+        frames.put("kafka-metadata", samples.kafkaMetadata().length);
 
-        // 逐帧注入(同序)
-        capture.inject("demo", samples.xethTelemetry());
-        capture.inject("demo", samples.xethAlarm());
-        capture.inject("demo", samples.gxLogin());
-        capture.inject("demo", samples.gxTelemetry());
-        capture.inject("demo", samples.gxConfig());
-        capture.inject("demo", samples.gxFileChunk());
-        capture.inject("demo", samples.mtalkHello());
-        capture.inject("demo", samples.mtalkEvents());
+        capture.inject("demo", samples.modbusReadResp());
+        capture.inject("demo", samples.modbusWriteMulti());
+        capture.inject("demo", samples.s7ReadJob());
+        capture.inject("demo", samples.s7AckData());
+        capture.inject("demo", samples.mqttConnect());
+        capture.inject("demo", samples.kafkaMetadata());
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "injected");

@@ -193,7 +193,7 @@ public class NetprotoController {
 
     // ---- 发包(原始以太网注入) ----
 
-    /** {iface, layers:[{protocol:"my-app", fields:{…}}, …]} 外层→内层。byte[] 字段给 hex 字符串。 */
+    /** {iface, layers:[{protocol:"modbus", fields:{…}}, …]} 外层→内层。byte[] 字段给 hex 字符串。 */
     @PostMapping("/send")
     public Map<String, Object> send(@RequestBody Map<String, Object> body) throws Exception {
         String iface = (String) body.get("iface");

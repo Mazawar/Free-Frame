@@ -1,0 +1,22 @@
+package com.example.demo.protocol.realworld.modbus;
+
+import com.example.netproto.annotation.Protocol;
+import com.example.netproto.annotation.ProtocolField;
+import lombok.Data;
+import lombok.ToString;
+
+/** Modbus 寄存器(16bit,大端)。 */
+@Data
+@ToString
+@Protocol(id = "modbus-register", name = "Modbus 寄存器")
+public class MbRegister {
+
+    @ProtocolField(order = 1, size = 16)
+    private int value;
+
+    public static MbRegister of(int v) {
+        MbRegister r = new MbRegister();
+        r.setValue(v);
+        return r;
+    }
+}

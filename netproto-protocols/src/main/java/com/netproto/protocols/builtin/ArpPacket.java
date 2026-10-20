@@ -13,6 +13,7 @@ import lombok.ToString;
 @ToString
 @Protocol(id = "arp", name = "ARP", builtin = true)
 @BindOn(parent = "ethernet", when = "etherType == 0x0806")
+@BindOn(parent = "vlan", when = "innerEtherType == 0x0806")
 public class ArpPacket {
 
     /** 硬件类型:1 = 以太网。 */

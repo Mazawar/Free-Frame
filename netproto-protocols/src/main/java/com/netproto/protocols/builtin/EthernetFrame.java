@@ -16,13 +16,13 @@ import lombok.ToString;
 @Protocol(id = "ethernet", name = "Ethernet II", builtin = true)
 public class EthernetFrame {
 
-    @ProtocolField(order = 1, size = 48)
+    @ProtocolField(order = 1, size = 48, label = "Destination")
     private long dstMac;
 
-    @ProtocolField(order = 2, size = 48)
+    @ProtocolField(order = 2, size = 48, label = "Source")
     private long srcMac;
 
-    @ProtocolField(order = 3, size = 16)
+    @ProtocolField(order = 3, size = 16, label = "Type")
     private int etherType;
 
     @Payload

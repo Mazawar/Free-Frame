@@ -17,20 +17,21 @@ import lombok.ToString;
 @ToString
 @Protocol(id = "udp", name = "UDP", builtin = true)
 @BindOn(parent = "ipv4", when = "protocol == 17")
+@BindOn(parent = "ipv6", when = "nextHeader == 17")
 public class UdpSegment implements PayloadAware {
 
-    @ProtocolField(order = 1, size = 16)
+    @ProtocolField(order = 1, size = 16, label = "Source Port")
     private int srcPort;
 
-    @ProtocolField(order = 2, size = 16)
+    @ProtocolField(order = 2, size = 16, label = "Destination Port")
     private int dstPort;
 
     /** 长度(含 8 字节 UDP 头)。 */
-    @ProtocolField(order = 3, size = 16)
+    @ProtocolField(order = 3, size = 16, label = "Length")
     private int length;
 
     /** 0 = 未计算(IPv4 下合法;伪头校验和属跨层,见设计文档)。 */
-    @ProtocolField(order = 4, size = 16)
+    @ProtocolField(order = 4, size = 16, label = "Checksum")
     private int checksum;
 
     @Payload

@@ -24,43 +24,44 @@ import java.util.Arrays;
 @ToString
 @Protocol(id = "ipv4", name = "IPv4", builtin = true)
 @BindOn(parent = "ethernet", when = "etherType == 0x0800")
+@BindOn(parent = "vlan", when = "innerEtherType == 0x0800")
 public class Ipv4Packet implements Checksum, PayloadAware {
 
-    @ProtocolField(order = 1, size = 4)
+    @ProtocolField(order = 1, size = 4, label = "Version")
     private int version = 4;
 
-    @ProtocolField(order = 2, size = 4)
+    @ProtocolField(order = 2, size = 4, label = "Header Length")
     private int ihl = 5;
 
-    @ProtocolField(order = 3, size = 8)
+    @ProtocolField(order = 3, size = 8, label = "Differentiated Services Field")
     private int tos;
 
-    @ProtocolField(order = 4, size = 16)
+    @ProtocolField(order = 4, size = 16, label = "Total Length")
     private int totalLength;
 
-    @ProtocolField(order = 5, size = 16)
+    @ProtocolField(order = 5, size = 16, label = "Identification")
     private int identification;
 
-    @ProtocolField(order = 6, size = 3)
+    @ProtocolField(order = 6, size = 3, label = "Flags")
     private int flags;
 
-    @ProtocolField(order = 7, size = 13)
+    @ProtocolField(order = 7, size = 13, label = "Fragment Offset")
     private int fragmentOffset;
 
-    @ProtocolField(order = 8, size = 8)
+    @ProtocolField(order = 8, size = 8, label = "Time To Live")
     private int ttl = 64;
 
-    @ProtocolField(order = 9, size = 8)
+    @ProtocolField(order = 9, size = 8, label = "Protocol")
     private int protocol;
 
-    @ProtocolField(order = 10, size = 16)
+    @ProtocolField(order = 10, size = 16, label = "Header Checksum")
     @ChecksumField
     private int headerChecksum;
 
-    @ProtocolField(order = 11, size = 32)
+    @ProtocolField(order = 11, size = 32, label = "Source")
     private int sourceIp;
 
-    @ProtocolField(order = 12, size = 32)
+    @ProtocolField(order = 12, size = 32, label = "Destination")
     private int destinationIp;
 
     @Payload

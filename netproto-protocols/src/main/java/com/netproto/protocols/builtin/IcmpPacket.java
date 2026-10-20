@@ -23,13 +23,13 @@ import java.util.Arrays;
 public class IcmpPacket implements Checksum {
 
     /** 类型:0=echo reply, 8=echo request, 3=不可达, 11=超时… */
-    @ProtocolField(order = 1, size = 8)
+    @ProtocolField(order = 1, size = 8, label = "Type")
     private int type;
 
-    @ProtocolField(order = 2, size = 8)
+    @ProtocolField(order = 2, size = 8, label = "Code")
     private int code;
 
-    @ProtocolField(order = 3, size = 16)
+    @ProtocolField(order = 3, size = 16, label = "Checksum")
     @ChecksumField
     private int checksum;
 

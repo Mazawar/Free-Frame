@@ -21,38 +21,39 @@ import java.util.Set;
 @ToString
 @Protocol(id = "tcp", name = "TCP", builtin = true)
 @BindOn(parent = "ipv4", when = "protocol == 6")
+@BindOn(parent = "ipv6", when = "nextHeader == 6")
 public class TcpSegment implements PayloadAware {
 
-    @ProtocolField(order = 1, size = 16)
+    @ProtocolField(order = 1, size = 16, label = "Source Port")
     private int srcPort;
 
-    @ProtocolField(order = 2, size = 16)
+    @ProtocolField(order = 2, size = 16, label = "Destination Port")
     private int dstPort;
 
-    @ProtocolField(order = 3, size = 32)
+    @ProtocolField(order = 3, size = 32, label = "Sequence Number")
     private long sequenceNumber;
 
-    @ProtocolField(order = 4, size = 32)
+    @ProtocolField(order = 4, size = 32, label = "Acknowledgment Number")
     private long acknowledgmentNumber;
 
     /** 数据偏移(单位 4 字节,无选项 = 5)。 */
-    @ProtocolField(order = 5, size = 4)
+    @ProtocolField(order = 5, size = 4, label = "Data Offset")
     private int dataOffset = 5;
 
-    @ProtocolField(order = 6, size = 4)
+    @ProtocolField(order = 6, size = 4, label = "Reserved")
     private int reserved;
 
-    @ProtocolField(order = 7, size = 8, flagClass = TcpFlag.class)
+    @ProtocolField(order = 7, size = 8, flagClass = TcpFlag.class, label = "Flags")
     private Set<TcpFlag> flags;
 
-    @ProtocolField(order = 8, size = 16)
+    @ProtocolField(order = 8, size = 16, label = "Window")
     private int window = 8192;
 
     /** 0 = 未计算(伪头跨层边界,见设计文档)。 */
-    @ProtocolField(order = 9, size = 16)
+    @ProtocolField(order = 9, size = 16, label = "Checksum")
     private int checksum;
 
-    @ProtocolField(order = 10, size = 16)
+    @ProtocolField(order = 10, size = 16, label = "Urgent Pointer")
     private int urgentPointer;
 
     @Payload

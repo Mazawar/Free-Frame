@@ -1,6 +1,6 @@
 package com.netproto.demo.web;
 
-import com.netproto.demo.protocol.realworld.RealWorldSamples;
+import com.netproto.demo.protocol.powerdist.PowerDistSamples;
 import com.netproto.spring.capture.CaptureEngine;
 import com.netproto.stack.StackEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,43 +11,41 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 真实协议样例注入端点:组装 Modbus TCP / S7comm / MQTT / Kafka 的完整以太网帧
- * 并注入解析管线,页面无需真实流量即可看到解析效果。
- * DL/T 645 与 ISO 8583 为串口/裸流孤岛协议(无以太网帧形态),不在注入之列。
+ * 智能配电样例注入端点:组装注册/注册许可/状态上报/参数查询响应四个完整以太网帧
+ * 注入解析管线,页面无需真实流量即可看到 UDP 9000 协议栈解析效果。
  */
 @RestController
 @RequestMapping("/api/demo")
 public class DemoSampleController {
 
     private final CaptureEngine capture;
-    private final RealWorldSamples samples;
+    private final PowerDistSamples samples;
 
     public DemoSampleController(CaptureEngine capture, StackEncoder encoder) {
         this.capture = capture;
-        this.samples = new RealWorldSamples(encoder);
+        this.samples = new PowerDistSamples(encoder);
     }
 
-    /** 注入全部 6 帧真实协议样例,返回各帧长度。 */
+    /** 注入配电协议交互样例(注册 → 许可 → 上报 → 参数响应),返回各帧长度。 */
     @PostMapping("/samples")
     public Map<String, Object> injectSamples() {
-        Map<String, Integer> frames = new LinkedHashMap<>();
-        frames.put("modbus-read-resp", samples.modbusReadResp().length);
-        frames.put("modbus-write-multi", samples.modbusWriteMulti().length);
-        frames.put("s7-read-job", samples.s7ReadJob().length);
-        frames.put("s7-ack-data", samples.s7AckData().length);
-        frames.put("mqtt-connect", samples.mqttConnect().length);
-        frames.put("kafka-metadata", samples.kafkaMetadata().length);
-
-        capture.inject("demo", samples.modbusReadResp());
-        capture.inject("demo", samples.modbusWriteMulti());
-        capture.inject("demo", samples.s7ReadJob());
-        capture.inject("demo", samples.s7AckData());
-        capture.inject("demo", samples.mqttConnect());
-        capture.inject("demo", samples.kafkaMetadata());
-
+        byte[][] frames = {
+                samples.register(),
+                samples.registerGrant(),
+                samples.statusReport(),
+                samples.paramQueryResp(),
+        };
+        Map<String, Integer> sizes = new LinkedHashMap<>();
+        sizes.put("pd-reg", frames[0].length);
+        sizes.put("pd-reg-grant", frames[1].length);
+        sizes.put("pd-status-report", frames[2].length);
+        sizes.put("pd-param-query-resp", frames[3].length);
+        for (byte[] f : frames) {
+            capture.inject("demo", f);
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "injected");
-        out.put("frames", frames);
+        out.put("frames", sizes);
         return out;
     }
 }

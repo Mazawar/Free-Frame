@@ -127,31 +127,30 @@ POST /api/netproto/import             # 导入 .pcap(multipart,仅以太网链�
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-140 个测试,按模块分布:core 68(引擎+栈,内联夹具)/ protocols 44(含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)/ demo 18(真实协议 round-trip + 上下文 + REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及 Modbus/S7/DLT645/ISO8583/MQTT/Kafka 真实报文样例。
+144 个测试,按模块分布:core 112(引擎+栈+内置协议栈与特性试金石,含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)/ demo 22(真实协议 round-trip + 上下文 + REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及 Modbus/S7/DLT645/ISO8583/MQTT/Kafka 真实报文样例。
 
 ## 模块结构(按需引入)
 
 ```
 netproto-parent
 ├── netproto-core          注解 + 反射编解码引擎 + Expr 小语言 + 分派栈(Registry/Decoder/Encoder)
-│                          零依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
-├── netproto-protocols     协议组包/扩展:内置栈(ethernet/arp/vlan/ipv4/ipv6/icmp/icmpv6/udp/tcp)
-│                          + DNS/DHCP/IP/TCP 扩展定义(模块共 24 个 @Protocol),依赖 core
+│                          + 内置协议栈 com.netproto.protocols.builtin(ethernet/arp/vlan/ipv4/
+│                          ipv6/icmp/icmpv6/udp/tcp)与特性试金石(dns/dhcp/ip/tcp 示例+测试)
+│                          零第三方依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
 ├── netproto-web   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
-│                          + REST/SSE + 内置观测页面;protocols 为 optional(可自带协议栈)
+│                          + REST/SSE + 内置观测页面
 └── netproto-demo          演示/测试应用:全模块引入 + 真实协议套件(Modbus/S7/DLT645/
                            ISO8583/MQTT/Kafka)+ Spring Boot 入口
 ```
 
-按需引入示例:只做协议编解码 → `netproto-core`;要标准协议栈 → 加 `netproto-protocols`;
-要观测页面/采集/发包 → 加 `netproto-web`(不想用内置栈可 exclude `netproto-protocols`,
-配 `netproto.builtin-packages: []` 并提供自己的根协议)。
+按需引入示例:只做协议编解码(含内置栈) → `netproto-core`;
+要观测页面/采集/发包 → 加 `netproto-web`(不想用内置栈可配
+`netproto.builtin-packages: []` 并提供自己的根协议)。
 
 ## 目录结构
 
 ```
-netproto-core/       com.netproto.{annotation,core,stack}
-netproto-protocols/  com.netproto.protocols.{builtin,dns,dhcp,ip,eth,tcp}
+netproto-core/       com.netproto.{annotation,core,stack,protocols.{builtin,tcp}}
 netproto-web/        com.netproto.spring.{config,capture,web} + static 观测页(前端源码 ui/,Vite + TS)
 netproto-demo/       com.netproto.demo(DemoApplication + protocol.realworld 真实协议套件)
 ```

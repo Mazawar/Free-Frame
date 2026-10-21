@@ -547,11 +547,13 @@ watch(packet, p => {
         />
       </div>
       <div class="hex-side">
-        <div class="hex-actions">
-          <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
-          <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
+        <div class="hex-wrap">
+          <HexView :packet="packet" :highlight="highlight" :layer-hl="layerHighlight" @byte-click="onByteClick" />
+          <div class="hex-actions">
+            <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
+            <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
+          </div>
         </div>
-        <HexView :packet="packet" :highlight="highlight" :layer-hl="layerHighlight" @byte-click="onByteClick" />
       </div>
     </div>
   </section>
@@ -583,7 +585,16 @@ watch(packet, p => {
   padding-right: 10px; margin-right: 10px;
 }
 .hex-side { flex: 1.25; min-width: 0; display: flex; flex-direction: column; }
-.hex-actions { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 2px; }
+/* 复制按钮悬浮在 hex 框右上角 */
+.hex-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+.hex-wrap :deep(.hex) { flex: 1; }
+.hex-actions {
+  position: absolute; top: 6px; right: 10px; z-index: 2;
+  display: flex; gap: 2px;
+  background: rgba(13, 17, 23, .92);
+  border: 1px solid #21262d; border-radius: 4px;
+  padding: 0 4px;
+}
 
 /* 树节点内容 */
 :deep(.layer-row) { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }

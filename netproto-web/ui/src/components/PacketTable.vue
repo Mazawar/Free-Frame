@@ -24,13 +24,9 @@ function protoChip(p: PacketSummary) {
     fontFamily: 'ui-monospace, Consolas, monospace',
     whiteSpace: 'nowrap' as const,
   }
-  // 有分组的协议:组路径逐级一个标签 + 末尾协议名(如 [智能配电][接入管理][开机注册])
+  // 有分组的协议只显示一枚顶层组标签(如 [智能配电]);信令名在信息列,完整链路在详情面板
   const segs = meta?.groupPath ?? []
-  if (!segs.length) {
-    return h('span', { style: base }, id.toUpperCase())
-  }
-  const tags = [...segs, meta?.name ?? id].map(t => h('span', { style: base }, t))
-  return h('span', { style: { display: 'inline-flex', gap: '4px' } }, tags)
+  return h('span', { style: base }, (segs[0] ?? id).toUpperCase())
 }
 
 const columns: DataTableColumns<PacketSummary> = [
@@ -41,7 +37,7 @@ const columns: DataTableColumns<PacketSummary> = [
     title: '目标地址', key: 'dst', width: 170,
     render: r => h('span', { class: 'mono' }, r.dst),
   },
-  { title: '协议', key: 'proto', width: 190, render: protoChip },
+  { title: '协议', key: 'proto', width: 120, render: protoChip },
   { title: '长度', key: 'len', width: 60, render: r => h('span', { class: 'num dim' }, String(r.len)) },
   {
     title: '信息', key: 'info', ellipsis: { tooltip: true },

@@ -127,7 +127,7 @@ POST /api/netproto/import             # 导入 .pcap(multipart,仅以太网链�
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-139 个测试,按模块分布:core 112(引擎+栈+内置协议栈与特性试金石,含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)/ demo 17(智能配电协议编码/解码演示 + 上下文 + REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及智能配电接入协议(UDP 9000 公共头 + 16 信令分派 + 计数列表)全链演示。
+160 个测试,按模块分布:core 117(引擎+栈+内置协议栈+特性试金石+@Payload 尾随字段,含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)/ demo 33(三套协议并存分派 + 编码/解码演示 + 帧尾 CRC 边界 + REST 冒烟)。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及智能配电接入协议(UDP 9000 公共头 + 16 信令分派 + 计数列表)全链演示。
 
 ## 模块结构(按需引入)
 

@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd-alarm-ack", name = "告警应答", group = "智能配电")
+@Protocol(id = "pd-alarm-ack", name = "告警应答", group = "数据上报/告警")
 @BindOn(parent = "pd", when = "signalType == 0x24")
 public class PdAlarmAck {
 

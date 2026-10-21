@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd-param-query", name = "参数查询", group = "智能配电")
+@Protocol(id = "pd-param-query", name = "参数查询", group = "参数配置")
 @BindOn(parent = "pd", when = "signalType == 0x13")
 public class PdParamQuery {
 

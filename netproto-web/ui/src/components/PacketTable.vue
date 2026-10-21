@@ -14,19 +14,23 @@ const rows = computed(() => filteredNewestFirst.value)
 function protoChip(p: PacketSummary) {
   const { id, index } = protocolOf(p)
   const c = layerColor(index)
-  // 有分组的协议只显示组名(KAFKA-METADATA → KAFKA);完整链路在详情面板展示
   const meta = store.protocols.find(x => x.id === id)
-  const label = (meta?.group || id).toUpperCase()
-  return h('span', {
-    style: {
-      color: c,
-      background: c + '14',
-      padding: '1px 7px',
-      borderRadius: '3px',
-      fontSize: '11px',
-      fontFamily: 'ui-monospace, Consolas, monospace',
-    },
-  }, label)
+  const base = {
+    color: c,
+    background: c + '14',
+    padding: '1px 7px',
+    borderRadius: '3px',
+    fontSize: '11px',
+    fontFamily: 'ui-monospace, Consolas, monospace',
+    whiteSpace: 'nowrap' as const,
+  }
+  // 有分组的协议:组路径逐级一个标签 + 末尾协议名(如 [智能配电][接入管理][开机注册])
+  const segs = meta?.groupPath ?? []
+  if (!segs.length) {
+    return h('span', { style: base }, id.toUpperCase())
+  }
+  const tags = [...segs, meta?.name ?? id].map(t => h('span', { style: base }, t))
+  return h('span', { style: { display: 'inline-flex', gap: '4px' } }, tags)
 }
 
 const columns: DataTableColumns<PacketSummary> = [
@@ -37,7 +41,7 @@ const columns: DataTableColumns<PacketSummary> = [
     title: '目标地址', key: 'dst', width: 170,
     render: r => h('span', { class: 'mono' }, r.dst),
   },
-  { title: '协议', key: 'proto', width: 100, render: protoChip },
+  { title: '协议', key: 'proto', width: 190, render: protoChip },
   { title: '长度', key: 'len', width: 60, render: r => h('span', { class: 'num dim' }, String(r.len)) },
   {
     title: '信息', key: 'info', ellipsis: { tooltip: true },

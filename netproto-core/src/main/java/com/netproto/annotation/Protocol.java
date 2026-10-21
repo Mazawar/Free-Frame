@@ -30,6 +30,10 @@ public @interface Protocol {
     /** 协议分组名(仅 UI 归纳语义):同组协议在侧栏折叠到一块,如 "Modbus"/"S7comm"。 */
     String group() default "";
 
+    /** 中间产物标记(公共头/纯结构层):不进侧栏过滤列表、不参与过滤命中、不进发包目标;
+     *  解码树与详情仍正常展示。端到端业务协议(信令体/分派叶子)保持默认 false。 */
+    boolean internal() default false;
+
     /** 报文级编解码器(必须实现 PacketCodec 且有无参构造);void.class = 反射式默认。 */
     Class<?> codec() default void.class;
 }

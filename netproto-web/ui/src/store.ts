@@ -32,8 +32,8 @@ export const filteredNewestFirst = computed(() => {
   // 任一层命中即显示(Wireshark 协议列点击语义):勾选 IPv6 = 显示所有含 IPv6 的帧,
   // 勾选业务组 = 显示该组业务帧;全部取消 = 全隐藏。
   // LIST/TLV 元素实体侧栏不可勾,不参与命中判断。
-  const exempt = new Set(
-    store.protocols.filter(p => p.category === 'element').map(p => p.id))
+  const exempt = new Set(store.protocols
+    .filter(p => p.category === 'element' || p.category === 'internal').map(p => p.id))
   const out: PacketSummary[] = []
   for (let i = store.packets.length - 1; i >= 0; i--) {
     const p = store.packets[i]!

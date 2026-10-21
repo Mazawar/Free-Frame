@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd-reg", name = "开机注册", group = "智能配电")
+@Protocol(id = "pd-reg", name = "开机注册", group = "接入管理")
 @BindOn(parent = "pd", when = "signalType == 0x01")
 public class PdRegister {
 

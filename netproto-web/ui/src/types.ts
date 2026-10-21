@@ -38,8 +38,10 @@ export interface ProtocolMeta {
   name: string
   builtin: boolean
   /** 协议分组名(空=不分组),同组在侧栏折叠到一块 */
-  group: string
-  /** stack=分派树协议 / island=孤岛(不在链路分派) / element=LIST/TLV 元素实体 */
+  /** 完整组路径(段数组):沿 @BindOn 父链推导,段数=层级深度,组名可含任意字符 */
+  groupPath: string[]
+  /** stack=分派树协议 / island=孤岛(不在链路分派) / element=LIST/TLV 元素实体 /
+   * internal=公共头等中间产物(不进侧栏、不参与命中、不进发包目标) */
   category: string
   fields: FieldMeta[]
 }

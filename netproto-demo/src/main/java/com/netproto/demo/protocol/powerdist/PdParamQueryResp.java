@@ -17,7 +17,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@Protocol(id = "pd-param-query-resp", name = "参数查询响应", group = "智能配电")
+@Protocol(id = "pd-param-query-resp", name = "参数查询响应", group = "参数配置")
 @BindOn(parent = "pd", when = "signalType == 0x14")
 public class PdParamQueryResp {
 

@@ -22,7 +22,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd", name = "智能配电接入", group = "智能配电")
+@Protocol(id = "pd", name = "智能配电接入", group = "智能配电", internal = true)
 @BindOn(parent = "udp", when = "dstPort == 9000 || srcPort == 9000")
 public class PdFrame implements PayloadAware {
 

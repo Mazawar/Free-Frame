@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd-heartbeat-resp", name = "心跳应答", group = "智能配电")
+@Protocol(id = "pd-heartbeat-resp", name = "心跳应答", group = "接入管理")
 @BindOn(parent = "pd", when = "signalType == 0x06")
 public class PdHeartbeatResp {
 

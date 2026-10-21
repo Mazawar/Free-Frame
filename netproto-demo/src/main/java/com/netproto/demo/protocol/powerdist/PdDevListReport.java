@@ -17,7 +17,7 @@ import java.util.List;
  */
 @Data
 @ToString
-@Protocol(id = "pd-dev-list", name = "设备清单上报", group = "智能配电")
+@Protocol(id = "pd-dev-list", name = "设备清单上报", group = "数据上报")
 @BindOn(parent = "pd", when = "signalType == 0x25")
 public class PdDevListReport {
 

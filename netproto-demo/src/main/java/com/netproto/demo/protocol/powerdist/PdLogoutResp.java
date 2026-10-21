@@ -12,7 +12,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "pd-logout-resp", name = "注销应答", group = "智能配电")
+@Protocol(id = "pd-logout-resp", name = "注销应答", group = "接入管理")
 @BindOn(parent = "pd", when = "signalType == 0x04")
 public class PdLogoutResp {
 

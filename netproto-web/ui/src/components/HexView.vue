@@ -102,8 +102,8 @@ async function measurePolygon(retries = 5) {
     if (hx != null && asc != null) {
       hexPolys.value = hx
       asciiPolys.value = asc
-      svgW.value = el.scrollWidth
-      svgH.value = el.scrollHeight
+      svgW.value = el.clientWidth      // 可视区尺寸:SVG 不撑大内容宽度,避免出现横向滚动条
+      svgH.value = el.clientHeight
       return
     }
     // 行未渲染齐:双 rAF 后重试(跨帧渲染/晚到的行);放弃时保留旧框,避免画残缺封口线

@@ -14,8 +14,6 @@ const rootEl = ref<HTMLElement | null>(null)
  *  避免强行连桥在未选区域画出多余横线。 */
 const hexPolys = ref<[number, number][][]>([])
 const asciiPolys = ref<[number, number][][]>([])
-const svgW = ref(0)
-const svgH = ref(0)
 
 const BYTE_COLS = 16
 
@@ -102,8 +100,6 @@ async function measurePolygon(retries = 5) {
     if (hx != null && asc != null) {
       hexPolys.value = hx
       asciiPolys.value = asc
-      svgW.value = el.clientWidth      // 可视区尺寸:SVG 不撑大内容宽度,避免出现横向滚动条
-      svgH.value = el.clientHeight
       return
     }
     // 行未渲染齐:双 rAF 后重试(跨帧渲染/晚到的行);放弃时保留旧框,避免画残缺封口线
@@ -149,7 +145,7 @@ let ro: ResizeObserver | null = null
       </span>
     </div>
     <!-- 选中区外框:hex 与 ASCII 各一组闭合多边形(相连=阶梯,断开=独立框) -->
-    <svg v-if="hexPolyStrs.length" class="hl-svg" :width="svgW" :height="svgH" aria-hidden="true">
+    <svg v-if="hexPolyStrs.length" class="hl-svg" aria-hidden="true">
       <polygon v-for="(pts, i) in hexPolyStrs" :key="'h' + i" :points="pts" />
       <polygon v-for="(pts, i) in asciiPolyStrs" :key="'a' + i" :points="pts" />
     </svg>
@@ -180,7 +176,8 @@ let ro: ResizeObserver | null = null
 .cell.lhl { background: rgba(31, 111, 235, .16); }
 .hl-svg {
   position: absolute; top: 0; left: 0; z-index: 1;
-  pointer-events: none; overflow: visible;
+  width: 100%; height: 100%;     /* 恰好占可视区:永不参与滚动尺寸计算 */
+  pointer-events: none; overflow: visible;   /* 超出可视区的框线照常绘制 */
 }
 .hl-svg polygon {
   fill: rgba(88, 166, 255, .08);

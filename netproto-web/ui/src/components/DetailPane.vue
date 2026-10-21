@@ -482,10 +482,37 @@ function applySelection(key: string) {
 
 function onSelect(keys: (string | number)[]) {
   const k = keys[0] as string | undefined
-  if (k) applySelection(k)
+  if (!k) return
+  if (selectedKeys.value[0] === k) {
+    // 再点同一节点 = 取消选中
+    selectedKeys.value = []
+    highlight.value = null
+    return
+  }
+  applySelection(k)
+}
+
+/**
+ * 捕获阶段拦截「点击已选中节点」:naive-ui 对已选中节点不重复发 selection 事件,
+ * 在根容器捕获并阻止冒泡,实现再次点击取消选中。
+ */
+function onTreeClickCapture(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.closest('.n-tree-node--selected') && target.closest('.n-tree-node-content__text')) {
+    e.stopPropagation()
+    e.preventDefault()
+    selectedKeys.value = []
+    highlight.value = null
+  }
 }
 
 function onByteClick(idx: number) {
+  // 点击已选字段再点一次 = 取消选中
+  if (highlight.value && idx >= highlight.value[0] && idx < highlight.value[1]) {
+    highlight.value = null
+    selectedKeys.value = []
+    return
+  }
   const hits = rangesIndex.value.filter(r => idx >= r.start && idx < r.end)
   if (!hits.length) {
     selectedKeys.value = []
@@ -536,6 +563,7 @@ watch(packet, p => {
     <div class="pane-body">
       <div class="tree-side">
         <n-tree
+          @click.capture="onTreeClickCapture"
           :key="packet.seq"
           :data="treeData"
           :cancelable="false"

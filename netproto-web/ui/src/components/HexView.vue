@@ -64,13 +64,12 @@ function inLayer(idx: number): boolean {
 /* 第 9 字节起为第二组:左移出 8 字节分组间隔 */
 .cell.g8 { margin-left: 14px; }
 .cell:hover { background: rgba(177, 186, 196, .14); }
-/* 双层高亮:所属协议层=浅蓝底,选中字段=实心蓝 */
-.cell.lhl { background: rgba(31, 111, 235, .22); border-radius: 0; }
+/* 双层高亮:所属协议层=浅蓝底,选中字段=半透明蓝底+描边(保留原字节色) */
+.cell.lhl { background: rgba(31, 111, 235, .18); border-radius: 0; }
 .cell.hl {
-  background: #1f6feb;
-  color: #fff !important;
-  font-weight: 700;
-  border-radius: 0;
+  background: rgba(88, 166, 255, .22);
+  box-shadow: inset 0 0 0 1px #58a6ff;
+  font-weight: 600;
 }
 .ascii { color: #484f58; padding-left: 18px; border-left: 1px solid #1b222b; }
 .ascii .cell { width: auto; padding: 0 1px; }

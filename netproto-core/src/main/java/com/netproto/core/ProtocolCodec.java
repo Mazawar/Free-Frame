@@ -26,7 +26,25 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
         for (Field f : clazz.getDeclaredFields()) {
             if (f.isAnnotationPresent(Payload.class)) {
-                payload = FieldInfo.forPayload(f);
+                if (f.isAnnotationPresent(com.netproto.annotation.ProtocolField.class)) {
+                    // 长度驱动 @Payload:body 按 lengthField 截断读,其后可声明尾随字段
+                    // (帧尾 CRC/结束符);子协议分派入口(body 起点)由 lastHeaderBits 保留。
+                    FieldInfo fi = new FieldInfo(f);
+                    if (fi.lengthField.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "@Payload field '" + f.getName() + "' with @ProtocolField must declare"
+                                        + " lengthField (length-driven payload mode); bare @Payload takes"
+                                        + " rest-of-layer and cannot be followed by any field");
+                    }
+                    if (effectiveType(fi) != FieldType.BYTES) {
+                        throw new IllegalArgumentException(
+                                "@Payload field '" + f.getName() + "' must keep type BYTES (default)");
+                    }
+                    fixed.add(fi);
+                    payload = fi;
+                } else {
+                    payload = FieldInfo.forPayload(f);
+                }
             } else if (f.isAnnotationPresent(com.netproto.annotation.ProtocolField.class)) {
                 fixed.add(new FieldInfo(f));
             }
@@ -38,8 +56,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     /** 注册期校验:lengthField 引用的字段必须存在,且 order 必须更小(禁止前向引用)。 */
-    private static void validateReferences(List<FieldInfo> sortedFields) {
-        Map<String, Integer> nameToOrder = new HashMap<>();
+    private static void validateReferences(List<FieldInfo> sortedFields) {        Map<String, Integer> nameToOrder = new HashMap<>();
         for (FieldInfo fi : sortedFields) {
             nameToOrder.put(fi.name, fi.order);
         }
@@ -223,12 +240,30 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             BitCursor cursor = new BitCursor(rawData, offset);
             this.layerEndBits = length * 8;
             this.lastFieldRanges.clear();
+            int payloadStartBits = -1;   // 长度驱动 @Payload 的起始位(分派入口)
 
             for (FieldInfo fi : fixedFields) {
                 if (!evalPresentIf(fi, ctx)) {
                     continue; // 条件不满足:不读字节、不入 ctx
                 }
                 int startBit = cursor.bitOffset();
+                if (fi.payloadField) {
+                    // 长度驱动 @Payload:按 lengthField 截断读;尾随字段在循环内继续,
+                    // 分派起点(lastHeaderBits)停在 body 起点(见循环后)。
+                    long psize = resolveSize(fi, obj, ctx, true, length * 8 - cursor.bitOffset());
+                    if (psize < 0 || psize % 8 != 0) {
+                        throw new IllegalStateException("payload field '" + fi.name
+                                + "': lengthField resolves to non-whole-byte size " + psize);
+                    }
+                    byte[] pval = cursor.readBytes((int) psize);   // readBytes 收位(BYTES 语义)
+                    fi.field.setAccessible(true);
+                    fi.field.set(obj, pval);
+                    this.lastFieldRanges.put(fi.name, new int[]{startBit, (int) (startBit + psize)});
+                    if (payloadStartBits < 0) {
+                        payloadStartBits = startBit;
+                    }
+                    continue;
+                }
                 Object value;
                 if (fi.custom != null) {
                     // L2 逃生舱:自定义编解码器全权接管该字段(自行推进游标)
@@ -250,10 +285,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 fi.field.set(obj, value);
                 ctx.put(fi.name, value);
             }
-            this.lastHeaderBits = cursor.bitOffset();
+            // 长度驱动 @Payload:分派入口 = body 起点(尾随字段不影响);
+            // 裸 @Payload/无 payload:入口 = 声明字段结束处(与旧语义一致)
+            this.lastHeaderBits = payloadStartBits >= 0 ? payloadStartBits : cursor.bitOffset();
 
-            // 向后兼容:@Payload 取剩余字节
-            if (payloadField != null) {
+            // 向后兼容:裸 @Payload 取剩余字节(长度驱动模式已在循环内读毕)
+            if (payloadField != null && payloadField.order < 0) {
                 int consumedBits = cursor.bitOffset();
                 int consumedBytes = (consumedBits + 7) / 8;
                 if (length > consumedBytes) {
@@ -277,10 +314,33 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 ctx.put(fi.name, fi.field.get(obj));
             }
 
+            // payload 内容先取(长度驱动模式在循环内按 order 位置写入;裸 @Payload 循环后追加)
+            byte[] payloadData = null;
+            if (payloadField != null) {
+                payloadField.field.setAccessible(true);
+                payloadData = (byte[]) payloadField.field.get(obj);
+            }
+
             // 第一遍:算总位数
             int totalBits = 0;
             for (FieldInfo fi : fixedFields) {
                 if (!evalPresentIf(fi, ctx)) {
+                    continue;
+                }
+                if (fi.payloadField) {
+                    // 一致性:lengthField 推导的字节数必须与实际 payload 一致
+                    // (长度值由用户经 PayloadAware.onPayload 或手工设置 —— 与裸 @Payload 模式同约定)
+                    long impliedBits = resolveSize(fi, obj, ctx, false, 0);
+                    int actualBytes = payloadData == null ? 0 : payloadData.length;
+                    if (impliedBits < 0 || impliedBits / 8 != actualBytes) {
+                        throw new IllegalStateException(
+                                "payload field '" + fi.name + "': lengthField '" + fi.lengthField
+                                        + "'=" + numberFieldValue(fieldOf(fi.lengthField), obj)
+                                        + " implies " + (impliedBits < 0 ? "?" : impliedBits / 8)
+                                        + " body bytes but payload has " + actualBytes
+                                        + " — set the length field (PayloadAware.onPayload or manual)");
+                    }
+                    totalBits += actualBytes * 8;
                     continue;
                 }
                 if (fi.custom != null) {
@@ -294,13 +354,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 }
                 totalBits += size;
             }
-            byte[] payloadData = null;
-            if (payloadField != null) {
-                payloadField.field.setAccessible(true);
-                payloadData = (byte[]) payloadField.field.get(obj);
-                if (payloadData != null) {
-                    totalBits += payloadData.length * 8;
-                }
+            if (payloadField != null && payloadField.order < 0 && payloadData != null) {
+                totalBits += payloadData.length * 8;
             }
 
             BitCursor cursor = new BitCursor((totalBits + 7) / 8);
@@ -308,6 +363,10 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             java.util.Map<String, Integer> checksumOffsets = new java.util.HashMap<>();
             for (FieldInfo fi : fixedFields) {
                 if (!evalPresentIf(fi, ctx)) {
+                    continue;
+                }
+                if (fi.payloadField) {
+                    cursor.writeBytes(payloadData == null ? new byte[0] : payloadData);
                     continue;
                 }
                 if (fi.custom != null) {
@@ -325,7 +384,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     writeValue(fi, obj, cursor, (int) size, ctx);
                 }
             }
-            if (payloadField != null && payloadData != null) {
+            if (payloadField != null && payloadField.order < 0 && payloadData != null) {
                 cursor.writeBytes(payloadData);
             }
             // 第三步:若实体实现 Checksum,对每个校验和字段 compute → 回写
@@ -617,6 +676,16 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     /** 读数值字段为 long(非数值/不可读返回 0)。 */
+    /** 按字段名找声明字段(一致性检查用;找不到返回 null → numberFieldValue 得 0)。 */
+    private Field fieldOf(String name) {
+        for (FieldInfo fi : fixedFields) {
+            if (fi.name.equals(name)) {
+                return fi.field;
+            }
+        }
+        return null;
+    }
+
     private static long numberFieldValue(java.lang.reflect.Field f, Object obj) {
         if (f == null) {
             return 0;
@@ -1101,6 +1170,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         final String name;
         final int order;
         final int size;
+        /** 带 @Payload 标记(长度驱动模式:同时有 @ProtocolField+lengthField,参与字段排序)。 */
+        final boolean payloadField;
         final com.netproto.annotation.Endian endian;
         final FieldType type;
         final String lengthField;
@@ -1142,6 +1213,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         FieldInfo(Field f) {
             this.field = f;
             this.name = f.getName();
+            this.payloadField = f.isAnnotationPresent(Payload.class);
             com.netproto.annotation.ProtocolField ann = f.getAnnotation(com.netproto.annotation.ProtocolField.class);
             this.order = ann.order();
             this.size = ann.size();
@@ -1243,6 +1315,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             this.name = name;
             this.order = -1;
             this.size = -1;
+            this.payloadField = true;
             this.type = FieldType.BYTES;
             this.lengthField = "";
             this.lengthUnit = LengthUnit.BYTES;

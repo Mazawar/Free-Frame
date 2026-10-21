@@ -5,56 +5,114 @@ import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { protoCounts, store } from '../store'
 import type { ProtocolMeta } from '../types'
 
-interface Row { id: string; name: string; builtin: boolean; count: number }
-interface GroupBlock { name: string; rows: Row[]; count: number; checked: boolean; indeterminate: boolean }
-interface Section { label: string; rows: Row[]; groups: GroupBlock[] }
+interface Row { id: string; name: string; count: number }
+/** 组节点:path 为 '/' 连接的完整组路径(如 智能配电/接入管理),支持任意深度。 */
+interface GroupNode {
+  name: string
+  key: string
+  rows: Row[]
+  children: GroupNode[]
+  count: number
+  checked: boolean
+  indeterminate: boolean
+}
+interface Item {
+  kind: 'group' | 'row'
+  depth: number
+  group?: GroupNode
+  row?: Row
+}
+interface Section { label: string; items: Item[] }
 
-const expandedGroups = ref(new Set<string>())
+const expandedPaths = ref(new Set<string>())
 
-function toggleGroup(name: string) {
-  const s = new Set(expandedGroups.value)
-  s.has(name) ? s.delete(name) : s.add(name)
-  expandedGroups.value = s
+function toggleExpand(key: string) {
+  const s = new Set(expandedPaths.value)
+  s.has(key) ? s.delete(key) : s.add(key)
+  expandedPaths.value = s
 }
 
 function toRow(p: ProtocolMeta): Row {
-  return { id: p.id, name: p.name, builtin: p.builtin, count: protoCounts.get(p.id) ?? 0 }
+  return { id: p.id, name: p.name, count: protoCounts.get(p.id) ?? 0 }
+}
+
+/** 组段数组 → 树:每段一级,协议挂最深层节点。
+ *  展开键取 JSON 串:段内含任意字符(包括其它组的名字)都不会碰撞。 */
+function insert(root: GroupNode, segs: string[], row: Row) {
+  let cur = root
+  let key = '[]'
+  for (const seg of segs) {
+    key = JSON.stringify([...JSON.parse(key), seg])
+    let next = cur.children.find(c => c.key === key)
+    if (!next) {
+      next = { name: seg, key, rows: [], children: [], count: 0, checked: false, indeterminate: false }
+      cur.children.push(next)
+    }
+    cur = next
+  }
+  cur.rows.push(row)
+}
+
+/** 自底向上聚合:计数、全选/半选状态。 */
+function aggregate(node: GroupNode): { total: number; enabled: number } {
+  let total = node.rows.length
+  let enabled = node.rows.filter(r => store.enabled.has(r.id)).length
+  for (const c of node.children) {
+    const s = aggregate(c)
+    total += s.total
+    enabled += s.enabled
+  }
+  node.count = node.rows.reduce((a, r) => a + r.count, 0)
+    + node.children.reduce((a, c) => a + c.count, 0)
+  node.checked = total > 0 && enabled === total
+  node.indeterminate = enabled > 0 && enabled < total
+  return { total, enabled }
+}
+
+/** 树 → 扁平渲染项;组未展开则不下钻。 */
+function flatten(node: GroupNode, depth: number, out: Item[]) {
+  out.push({ kind: 'group', depth, group: node })
+  if (!expandedPaths.value.has(node.key)) {
+    return
+  }
+  for (const r of node.rows) {
+    out.push({ kind: 'row', depth: depth + 1, row: r })
+  }
+  for (const c of node.children) {
+    flatten(c, depth + 1, out)
+  }
 }
 
 const sections = computed<Section[]>(() => {
   const buckets: Record<string, ProtocolMeta[]> = { stackBuiltin: [], stackCustom: [], island: [] }
   for (const p of store.protocols) {
-    if (p.category === 'element') continue   // LIST/TLV 元素实体:不可过滤,不展示
+    // 元素实体/公共头等中间产物:不可过滤,不展示
+    if (p.category === 'element' || p.category === 'internal') continue
     if (p.category === 'island') buckets.island.push(p)
     else buckets[p.builtin ? 'stackBuiltin' : 'stackCustom'].push(p)
   }
-  const build = (list: ProtocolMeta[]): Pick<Section, 'rows' | 'groups'> => {
-    const plain: Row[] = []
-    const byGroup = new Map<string, ProtocolMeta[]>()
+  const build = (list: ProtocolMeta[]): Pick<Section, 'items'> => {
+    const root: GroupNode = { name: '', key: '[]', rows: [], children: [], count: 0, checked: false, indeterminate: false }
     for (const p of list) {
-      if (p.group) {
-        if (!byGroup.has(p.group)) byGroup.set(p.group, [])
-        byGroup.get(p.group)!.push(p)
-      } else {
-        plain.push(toRow(p))
-      }
+      insert(root, p.groupPath, toRow(p))
     }
-    const groups: GroupBlock[] = [...byGroup.entries()].map(([name, ps]) => {
-      const rows = ps.map(toRow)
-      const enabledCount = rows.filter(r => store.enabled.has(r.id)).length
-      return {
-        name, rows,
-        count: rows.reduce((a, r) => a + r.count, 0),
-        checked: rows.length > 0 && enabledCount === rows.length,
-        indeterminate: enabledCount > 0 && enabledCount < rows.length,
-      }
-    })
-    return { rows: plain, groups }
+    aggregate(root)
+    const items: Item[] = []
+    for (const r of root.rows) {
+      items.push({ kind: 'row', depth: 0, row: r })
+    }
+    for (const g of root.children) {
+      flatten(g, 0, items)
+    }
+    return { items }
   }
   const out: Section[] = []
-  if (buckets.stackBuiltin.length) out.push({ label: '内置协议栈', ...build(buckets.stackBuiltin) })
-  if (buckets.stackCustom.length) out.push({ label: '业务协议', ...build(buckets.stackCustom) })
-  if (buckets.island.length) out.push({ label: '独立协议 · 不在链路分派', ...build(buckets.island) })
+  const b = build(buckets.stackBuiltin)
+  const c = build(buckets.stackCustom)
+  const i = build(buckets.island)
+  if (b.items.length) out.push({ label: '内置协议栈', items: b.items })
+  if (c.items.length) out.push({ label: '业务协议', items: c.items })
+  if (i.items.length) out.push({ label: '独立协议 · 不在链路分派', items: i.items })
   return out
 })
 
@@ -62,16 +120,19 @@ function toggle(id: string, v: boolean) {
   v ? store.enabled.add(id) : store.enabled.delete(id)
 }
 
-/** 组级勾选:全选/取消组内全部。 */
-function toggleGroupCheck(g: GroupBlock, v: boolean) {
+/** 组级勾选:全选/取消该组全部后代协议。 */
+function toggleGroupCheck(g: GroupNode, v: boolean) {
   for (const r of g.rows) {
     v ? store.enabled.add(r.id) : store.enabled.delete(r.id)
+  }
+  for (const c of g.children) {
+    toggleGroupCheck(c, v)
   }
 }
 
 function selectAll() {
   store.protocols.forEach(p => {
-    if (p.category !== 'element') store.enabled.add(p.id)
+    if (p.category !== 'element' && p.category !== 'internal') store.enabled.add(p.id)
   })
 }
 </script>
@@ -86,39 +147,30 @@ function selectAll() {
     <div class="scroll">
       <section v-for="s in sections" :key="s.label">
         <div class="group-label">{{ s.label }}</div>
-
-        <!-- 无组协议 -->
-        <label v-for="row in s.rows" :key="row.id" class="row" :title="row.id">
-          <n-checkbox size="small"
-                      :checked="store.enabled.has(row.id)"
-                      :on-update:checked="(v: boolean) => toggle(row.id, v)" />
-          <span class="pname">{{ row.name }}</span>
-          <span class="pcount num" :class="{ zero: row.count === 0 }">{{ row.count }}</span>
-        </label>
-
-        <!-- 协议分组:折叠归纳 + 组级三态勾选 -->
-        <div v-for="g in s.groups" :key="g.name" class="pblock">
-          <div class="row grow">
+        <template v-for="(item, i) in s.items" :key="(item.group?.key ?? item.row?.id) + i">
+          <!-- 组节点:任意深度,三态勾选 + 折叠 -->
+          <div v-if="item.kind === 'group' && item.group" class="row grow"
+               :style="{ paddingLeft: 6 + item.depth * 14 + 'px' }">
             <n-checkbox size="small"
-                        :checked="g.checked"
-                        :indeterminate="g.indeterminate"
-                        :on-update:checked="(v: boolean) => toggleGroupCheck(g, v)" />
-            <span class="gname" @click="toggleGroup(g.name)">
-              <component :is="expandedGroups.has(g.name) ? ChevronDown : ChevronRight" :size="12" />
-              {{ g.name }}
+                        :checked="item.group.checked"
+                        :indeterminate="item.group.indeterminate"
+                        :on-update:checked="(v: boolean) => toggleGroupCheck(item.group!, v)" />
+            <span class="gname" @click="toggleExpand(item.group.key)">
+              <component :is="expandedPaths.has(item.group.key) ? ChevronDown : ChevronRight" :size="12" />
+              {{ item.group.name }}
             </span>
-            <span class="pcount num" :class="{ zero: g.count === 0 }">{{ g.count }}</span>
+            <span class="pcount num" :class="{ zero: item.group.count === 0 }">{{ item.group.count }}</span>
           </div>
-          <template v-if="expandedGroups.has(g.name)">
-            <label v-for="row in g.rows" :key="row.id" class="row indented" :title="row.id">
-              <n-checkbox size="small"
-                          :checked="store.enabled.has(row.id)"
-                          :on-update:checked="(v: boolean) => toggle(row.id, v)" />
-              <span class="pname">{{ row.name }}</span>
-              <span class="pcount num" :class="{ zero: row.count === 0 }">{{ row.count }}</span>
-            </label>
-          </template>
-        </div>
+          <!-- 协议行 -->
+          <label v-else-if="item.row" class="row" :title="item.row.id"
+                 :style="{ paddingLeft: 6 + item.depth * 14 + 'px' }">
+            <n-checkbox size="small"
+                        :checked="store.enabled.has(item.row.id)"
+                        :on-update:checked="(v: boolean) => toggle(item.row!.id, v)" />
+            <span class="pname">{{ item.row.name }}</span>
+            <span class="pcount num" :class="{ zero: item.row.count === 0 }">{{ item.row.count }}</span>
+          </label>
+        </template>
       </section>
     </div>
     <div class="foot">只解析已注册的协议</div>
@@ -154,8 +206,6 @@ function selectAll() {
   padding: 2px 6px; border-radius: 4px; cursor: pointer;
 }
 .row:hover { background: rgba(177, 186, 196, .06); }
-.row.indented { padding-left: 24px; }
-.row.grow { padding-left: 6px; }
 .pname {
   font-size: 12px; color: #c9d1d9;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -167,7 +217,6 @@ function selectAll() {
 }
 .gname:hover { color: #fff; }
 .gname :deep(svg) { color: #6e7681; flex-shrink: 0; }
-.pblock { margin: 1px 0; }
 .pcount { margin-left: auto; font-size: 11px; color: #8b949e; }
 .pcount.zero { color: #484f58; }
 .foot {

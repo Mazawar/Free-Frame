@@ -482,10 +482,37 @@ function applySelection(key: string) {
 
 function onSelect(keys: (string | number)[]) {
   const k = keys[0] as string | undefined
-  if (k) applySelection(k)
+  if (!k) return
+  if (selectedKeys.value[0] === k) {
+    // 再点同一节点 = 取消选中
+    selectedKeys.value = []
+    highlight.value = null
+    return
+  }
+  applySelection(k)
+}
+
+/**
+ * 捕获阶段拦截「点击已选中节点」:naive-ui 对已选中节点不重复发 selection 事件,
+ * 在根容器捕获并阻止冒泡,实现再次点击取消选中。
+ */
+function onTreeClickCapture(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.closest('.n-tree-node--selected') && target.closest('.n-tree-node-content__text')) {
+    e.stopPropagation()
+    e.preventDefault()
+    selectedKeys.value = []
+    highlight.value = null
+  }
 }
 
 function onByteClick(idx: number) {
+  // 点击已选字段再点一次 = 取消选中
+  if (highlight.value && idx >= highlight.value[0] && idx < highlight.value[1]) {
+    highlight.value = null
+    selectedKeys.value = []
+    return
+  }
   const hits = rangesIndex.value.filter(r => idx >= r.start && idx < r.end)
   if (!hits.length) {
     selectedKeys.value = []
@@ -536,6 +563,7 @@ watch(packet, p => {
     <div class="pane-body">
       <div class="tree-side">
         <n-tree
+          @click.capture="onTreeClickCapture"
           :key="packet.seq"
           :data="treeData"
           :cancelable="false"
@@ -547,11 +575,13 @@ watch(packet, p => {
         />
       </div>
       <div class="hex-side">
-        <div class="hex-actions">
-          <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
-          <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
+        <div class="hex-wrap">
+          <HexView :packet="packet" :highlight="highlight" :layer-hl="layerHighlight" @byte-click="onByteClick" />
+          <div class="hex-actions">
+            <n-button size="tiny" quaternary :disabled="!highlight" @click="copyHex(false)">复制选中</n-button>
+            <n-button size="tiny" quaternary @click="copyHex(true)">复制整帧</n-button>
+          </div>
         </div>
-        <HexView :packet="packet" :highlight="highlight" :layer-hl="layerHighlight" @byte-click="onByteClick" />
       </div>
     </div>
   </section>
@@ -583,7 +613,16 @@ watch(packet, p => {
   padding-right: 10px; margin-right: 10px;
 }
 .hex-side { flex: 1.25; min-width: 0; display: flex; flex-direction: column; }
-.hex-actions { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 2px; }
+/* 复制按钮悬浮在 hex 框右上角 */
+.hex-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+.hex-wrap :deep(.hex) { flex: 1; }
+.hex-actions {
+  position: absolute; top: 6px; right: 10px; z-index: 2;
+  display: flex; gap: 2px;
+  background: rgba(13, 17, 23, .92);
+  border: 1px solid #21262d; border-radius: 4px;
+  padding: 0 4px;
+}
 
 /* 树节点内容 */
 :deep(.layer-row) { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }

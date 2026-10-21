@@ -127,7 +127,7 @@ POST /api/netproto/import             # 导入 .pcap(multipart,仅以太网链�
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-122 个测试,按模块分布:core 112(引擎+栈+内置协议栈与特性试金石,含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)。演示应用另有 22 个测试,随 demo 在 redesign/protocol-stack 分支维护。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、L2 varint、L3 手写 codec、注册校验、自动装配、REST,以及 Modbus/S7/DLT645/ISO8583/MQTT/Kafka 真实报文样例。
+127 个测试,按模块分布:core 117(引擎+栈+内置协议栈+特性试金石+@Payload 尾随字段,含 pcap4j parity 对照:IPv4/IPv6/TCP)/ web 10(装配扫描+pcap+格式化)。演示应用另有 33 个测试(三套业务协议并存 + 编码/解码演示),随 demo 在 redesign/protocol-stack 分支维护。覆盖:位级/条件/变长/LIST/TLV/sentinel/校验和/parity + Expr 文法、四层分派、IPv6 双栈分派(udp/tcp/icmpv6)+ VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、帧尾字段、L2 varint、L3 手写 codec、注册校验、自动装配、REST。
 
 ## 模块结构(按需引入)
 
@@ -140,7 +140,7 @@ netproto-parent
 └── netproto-web   starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
                            + REST/SSE + 内置观测页面
 
-演示应用(netproto-demo:Modbus/S7/DLT645/ISO8583/MQTT/Kafka 套件)不在本分支,
+演示应用(netproto-demo:智能配电/设备通信/物联网三套协议 + 观测页)不在本分支,
 在 redesign/protocol-stack 分支维护。
 ```
 

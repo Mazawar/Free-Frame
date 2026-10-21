@@ -102,16 +102,35 @@ public class NetprotoController {
             }
         }
         List<Map<String, Object>> out = new ArrayList<>();
+        // 组路径推导:子协议 group 只声明自己的子组,完整路径 = 沿 @BindOn 父链收集各级 group
+        // (如 pd-reg"接入管理" → pd"智能配电" → ["智能配电","接入管理"]);跳过空组名。
+        // 以数组传输而非拼接字符串:组名含任意字符(包括 '/' )都不会破坏层级结构,
+        // 深度不限(父链环由 visited 防护)。
+        Map<String, List<String>> parentsByChild = new HashMap<>();
+        Map<String, String> groupById = new HashMap<>();
+        for (ProtocolRegistry.Entry e : registry.all()) {
+            Protocol ann = e.type().getAnnotation(Protocol.class);
+            groupById.put(e.id(), ann != null ? ann.group() : "");
+            List<String> parents = new ArrayList<>();
+            for (com.netproto.annotation.BindOn b :
+                    e.type().getAnnotationsByType(com.netproto.annotation.BindOn.class)) {
+                parents.add(b.parent());
+                parentIds.add(b.parent());
+            }
+            parentsByChild.put(e.id(), parents);
+        }
         for (ProtocolRegistry.Entry e : registry.all()) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", e.id());
             m.put("name", e.name());
             m.put("builtin", e.builtin());
-            m.put("group", e.type().getAnnotation(Protocol.class) != null
-                    ? e.type().getAnnotation(Protocol.class).group() : "");
+            m.put("groupPath", deriveGroupSegments(parentsByChild, groupById, e.id()));
             m.put("fields", fieldMeta(e.type()));
             String category;
-            if (elementClasses.contains(e.type())) {
+            Protocol ann = e.type().getAnnotation(Protocol.class);
+            if (ann != null && ann.internal()) {
+                category = "internal";   // 公共头/中间产物:不进侧栏、不参与命中、不进发包目标
+            } else if (elementClasses.contains(e.type())) {
                 category = "element";
                 // 可重复 @BindOn 多实例时 isAnnotationPresent 返回 false,须用 getAnnotationsByType
             } else if (e.type().getAnnotationsByType(com.netproto.annotation.BindOn.class).length > 0
@@ -124,6 +143,24 @@ public class NetprotoController {
             out.add(m);
         }
         return out;
+    }
+
+    /** 组路径推导:沿 @BindOn 父链收集各级非空 group,自己最里层;返回段数组(不拼接,防特殊字符);
+     *  环与多父(取第一个)安全,深度不限。 */
+    private static List<String> deriveGroupSegments(Map<String, List<String>> parentsByChild,
+                                                    Map<String, String> groupById, String id) {
+        java.util.LinkedList<String> parts = new java.util.LinkedList<>();
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        String cur = id;
+        while (cur != null && visited.add(cur)) {
+            String g = groupById.getOrDefault(cur, "");
+            if (!g.isEmpty()) {
+                parts.addFirst(g);
+            }
+            List<String> ps = parentsByChild.get(cur);
+            cur = ps == null || ps.isEmpty() ? null : ps.get(0);
+        }
+        return parts;
     }
 
     /** TLV dispatch 目标类:简单名按声明类所在包解析,全限定名直接加载;找不到忽略。 */

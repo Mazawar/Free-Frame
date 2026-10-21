@@ -26,10 +26,10 @@ const ifaceOptions = computed(() =>
 
 /** 可选目标:非 element 的协议(业务 + 栈协议都可发);按组分组展示(过滤输入可跨组搜索) */
 const targetOptions = computed(() => {
-  const protos = store.protocols.filter(p => p.category !== 'element')
+  const protos = store.protocols.filter(p => p.category !== 'element' && p.category !== 'internal')
   const groups = new Map<string, ProtocolMeta[]>()
   for (const p of protos) {
-    const g = p.group || (p.builtin ? '内置栈' : '独立协议')
+    const g = p.groupPath?.length ? p.groupPath.join(' / ') : (p.builtin ? '内置栈' : '独立协议')
     if (!groups.has(g)) groups.set(g, [])
     groups.get(g)!.push(p)
   }

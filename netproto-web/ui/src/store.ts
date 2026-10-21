@@ -1,8 +1,9 @@
 import { reactive, computed } from 'vue'
-import type { Iface, Packet, ProtocolMeta } from './types'
+import type { Iface, Packet, PacketSummary, ProtocolMeta } from './types'
 import { api } from './api'
 
-const MAX_PACKETS = 2000
+/** 前端缓冲上限兜底值;实际以后端 ring-size 为准(/config 拉取,见 bootstrap)。 */
+const DEFAULT_MAX_PACKETS = 100_000
 
 export const store = reactive({
   protocols: [] as ProtocolMeta[],
@@ -12,13 +13,20 @@ export const store = reactive({
   captureRunning: false,
   captured: 0,
   enabled: new Set<string>(),
-  packets: [] as Packet[],          // 旧→新
-  selected: null as Packet | null,
+  packets: [] as PacketSummary[],   // 旧→新(摘要行,不含协议树/hex)
+  selected: null as number | null,  // 选中帧 seq
+  detail: null as Packet | null,    // 选中帧完整详情(按需拉取)
   sse: 'connecting' as 'connecting' | 'open' | 'closed',
   sendOpen: false,
   /** 初始恢复(环形缓冲最近帧)完成;之前不挂载虚拟表格,避免布局未稳时测高失败 */
   bootstrapped: false,
+  /** 后端运行配置(只读):显示参数以它为准 */
+  config: { ringSize: DEFAULT_MAX_PACKETS, ringBytes: 0, snaplen: 0, rootProtocol: '' },
 })
+
+function maxPackets(): number {
+  return store.config.ringSize > 0 ? store.config.ringSize : DEFAULT_MAX_PACKETS
+}
 
 export const filteredNewestFirst = computed(() => {
   // 任一层命中即显示(Wireshark 协议列点击语义):勾选 IPv6 = 显示所有含 IPv6 的帧,
@@ -26,10 +34,10 @@ export const filteredNewestFirst = computed(() => {
   // LIST/TLV 元素实体侧栏不可勾,不参与命中判断。
   const exempt = new Set(
     store.protocols.filter(p => p.category === 'element').map(p => p.id))
-  const out: Packet[] = []
+  const out: PacketSummary[] = []
   for (let i = store.packets.length - 1; i >= 0; i--) {
     const p = store.packets[i]!
-    if (p.layers.some(l => !exempt.has(l.id) && store.enabled.has(l.id))) out.push(p)
+    if (p.layerIds.some(id => !exempt.has(id) && store.enabled.has(id))) out.push(p)
   }
   return out
 })
@@ -38,19 +46,18 @@ export const filteredNewestFirst = computed(() => {
 const counts = reactive(new Map<string, number>())
 export const protoCounts = counts
 
-function countPacket(p: Packet, delta: number) {
-  const seen = new Set<string>()
-  for (const l of p.layers) {
-    if (!seen.has(l.id)) { seen.add(l.id); counts.set(l.id, (counts.get(l.id) ?? 0) + delta) }
+function countPacket(p: PacketSummary, delta: number) {
+  for (const id of p.layerIds) {
+    counts.set(id, (counts.get(id) ?? 0) + delta)
   }
 }
 
 /** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用 */
-export function addPackets(batch: Packet[]) {
+export function addPackets(batch: PacketSummary[]) {
   if (batch.length === 0) return
   // 在普通副本上裁剪:避免对响应式数组 splice 逐索引触发(虚拟表格逐行订阅,量大时拖垮调度)
   const next = store.packets.concat(batch)
-  const overflow = next.length - MAX_PACKETS
+  const overflow = next.length - maxPackets()
   if (overflow > 0) {
     for (const p of next.splice(0, overflow)) countPacket(p, -1)
   }
@@ -62,21 +69,35 @@ export function addPackets(batch: Packet[]) {
 export function clearPackets() {
   store.packets = []
   store.selected = null
+  store.detail = null
   counts.clear()
 }
 
 export function closeDetail() {
   store.selected = null
+  store.detail = null
+}
+
+/**
+ * 选中一帧:完整详情按需拉取(摘要不常驻协议树,Wireshark 点击时解析)。
+ * 旧详情保留到新详情到达(stale-while-revalidate)—— 先置空会令面板卸载重挂,产生闪烁。
+ */
+export async function selectPacket(seq: number) {
+  store.selected = seq
+  try {
+    const p = await api.packet(seq)
+    if (store.selected === seq) store.detail = p   // 竞态守卫:期间换帧则丢弃
+  } catch { /* 帧已被环形缓冲淘汰:保留旧详情 */ }
 }
 
 let es: EventSource | null = null
-let pending: Packet[] = []          // 普通数组:SSE 事件先落地,不触发任何响应式更新
+let pending: PacketSummary[] = []     // 普通数组:SSE 事件先落地,不触发任何响应式更新
 let flushTimer: number | undefined
 let watchdogTimer: number | undefined
 let lastPing = 0
 
 /**
- * SSE 事件缓冲:逐包 addPacket 在 100+ 帧/秒时会把渲染队列堆死(每包一次全表重渲染,
+ * SSE 事件缓冲:逐包 addPackets 在 100+ 帧/秒时会把渲染队列堆死(每包一次全表重渲染,
  * 主线程饱和 → 页签冻结)。这里 150ms 合并一次,每秒最多 ~7 次响应式更新。
  */
 function flush() {

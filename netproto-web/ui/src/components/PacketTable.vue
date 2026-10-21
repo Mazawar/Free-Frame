@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, h, nextTick, ref, watch } from 'vue'
 import { NDataTable, type DataTableColumns } from 'naive-ui'
-import type { Packet } from '../types'
-import { filteredNewestFirst, store } from '../store'
-import { endpoints, fmtTime, info, layerColor, protocolOf } from '../utils/format'
+import type { PacketSummary } from '../types'
+import { filteredNewestFirst, selectPacket, store } from '../store'
+import { fmtTime, layerColor, protocolOf } from '../utils/format'
 
 const tableRef = ref<InstanceType<typeof NDataTable> | null>(null)
 // 首次填充时重建表格:挂载早期容器测高为 0,虚拟列表对整批灌入的行不会自愈
 const tableKey = ref(0)
 
-const rows = computed(() => filteredNewestFirst.value.slice(0, 1000))
+const rows = computed(() => filteredNewestFirst.value)
 
-function protoChip(p: Packet) {
+function protoChip(p: PacketSummary) {
   const { id, index } = protocolOf(p)
   const c = layerColor(index)
   // 有分组的协议只显示组名(KAFKA-METADATA → KAFKA);完整链路在详情面板展示
@@ -29,28 +29,25 @@ function protoChip(p: Packet) {
   }, label)
 }
 
-const columns: DataTableColumns<Packet> = [
-  { title: 'No.', key: 'seq', width: 64, render: r => h('span', { class: 'num' }, String(r.seq)) },
+const columns: DataTableColumns<PacketSummary> = [
+  { title: 'No.', key: 'seq', width: 72, render: r => h('span', { class: 'num' }, String(r.seq)) },
   { title: '时间', key: 'ts', width: 100, render: r => h('span', { class: 'num dim' }, fmtTime(r.ts)) },
+  { title: '源地址', key: 'src', width: 170, render: r => h('span', { class: 'mono' }, r.src) },
   {
-    title: '源地址', key: 'src', width: 150,
-    render: r => h('span', { class: 'mono' }, endpoints(r).src),
+    title: '目标地址', key: 'dst', width: 170,
+    render: r => h('span', { class: 'mono' }, r.dst),
   },
-  {
-    title: '目标地址', key: 'dst', width: 150,
-    render: r => h('span', { class: 'mono' }, endpoints(r).dst),
-  },
-  { title: '协议', key: 'proto', width: 96, render: protoChip },
+  { title: '协议', key: 'proto', width: 100, render: protoChip },
   { title: '长度', key: 'len', width: 60, render: r => h('span', { class: 'num dim' }, String(r.len)) },
   {
     title: '信息', key: 'info', ellipsis: { tooltip: true },
-    render: r => h('span', { class: 'info' }, info(r)),
+    render: r => h('span', { class: 'info' }, r.info),
   },
 ]
 
-const rowProps = (r: Packet) => ({
-  style: store.selected?.seq === r.seq ? 'cursor:pointer' : 'cursor:pointer',
-  onClick: () => { store.selected = r },
+const rowProps = (r: PacketSummary) => ({
+  style: 'cursor:pointer',
+  onClick: () => selectPacket(r.seq),
 })
 
 watch(() => rows.value.length, (n, old) => {
@@ -73,9 +70,10 @@ function t0() {
     ref="tableRef"
     :columns="columns"
     :data="rows"
-    :row-key="(r: Packet) => r.seq"
+    :item-height="26"
+    :row-key="(r: PacketSummary) => r.seq"
     :row-props="rowProps"
-    :row-class-name="(r: Packet) => store.selected?.seq === r.seq ? 'sel' : ''"
+    :row-class-name="(r: PacketSummary) => store.selected === r.seq ? 'sel' : ''"
     virtual-scroll
     flex-height style="height: 100%"
     size="small" :single-line="false"
@@ -96,7 +94,10 @@ function t0() {
 </template>
 
 <style scoped>
+/* 整数行高(26px = line-height 20 + padding 3×2 + border 1):虚拟滚动按整数行预算可见区,
+   小数行高会把最后一行切在滚动底部折叠线下(显示"少一行") */
 :deep(.n-data-table-tr) { height: 26px; }
+:deep(.n-data-table-td) { line-height: 20px; padding-top: 3px; padding-bottom: 3px; }
 :deep(.n-data-table-tr.sel .n-data-table-td) {
   background: #1e3a5f !important;
 }

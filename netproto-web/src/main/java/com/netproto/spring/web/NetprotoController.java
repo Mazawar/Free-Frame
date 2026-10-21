@@ -1,5 +1,6 @@
 package com.netproto.spring.web;
 
+import com.netproto.annotation.Payload;
 import com.netproto.annotation.Protocol;
 import com.netproto.annotation.ProtocolField;
 import com.netproto.spring.capture.CaptureEngine;
@@ -47,14 +48,28 @@ public class NetprotoController {
     private final RawSender sender;
     private final StackEncoder encoder;
     private final ObjectMapper objectMapper;
+    private final com.netproto.spring.config.NetprotoProperties props;
 
     public NetprotoController(ProtocolRegistry registry, CaptureEngine capture, RawSender sender,
-                              StackEncoder encoder, ApplicationContext appContext) {
+                              StackEncoder encoder, ApplicationContext appContext,
+                              com.netproto.spring.config.NetprotoProperties props) {
         this.registry = registry;
         this.capture = capture;
         this.sender = sender;
         this.encoder = encoder;
+        this.props = props;
         this.objectMapper = appContext.getBeanProvider(ObjectMapper.class).getIfAvailable(ObjectMapper::new);
+    }
+
+    /** 运行配置只读视图(前端按它适配显示,如缓冲上限跟随 ring-size)。 */
+    @GetMapping("/config")
+    public Map<String, Object> config() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("rootProtocol", props.getRootProtocol());
+        m.put("ringSize", props.getRingSize());
+        m.put("ringBytes", props.getRingBytes().toBytes());
+        m.put("snaplen", props.getSnaplen());
+        return m;
     }
 
     // ---- 协议元数据 ----
@@ -123,6 +138,99 @@ public class NetprotoController {
         }
     }
 
+    /**
+     * 发包模板生成:GET /template?path=mqtt-connect → 按分派树推导祖先链
+     * (ethernet▸ipv4▸tcp▸mqtt-connect)并实例化各层 POJO 取字段默认值。
+     * 只给「用户可填」的字段值;长度/计数/校验和等编码期自动的字段省略(编码器会补)。
+     */
+    @GetMapping("/template")
+    public Map<String, Object> template(@RequestParam String path) throws Exception {
+        String[] ids = path.split(",");
+        for (String id : ids) {
+            if (registry.get(id.trim()) == null) {
+                throw new IllegalArgumentException("unknown protocol: " + id);
+            }
+        }
+        // 从最深层向上推导祖先:每层取一条 @BindOn 链回溯到根,去重
+        LinkedHashSet<String> chain = new LinkedHashSet<>();
+        for (String id : ids) {
+            for (String anc : ancestorsOf(id.trim(), new java.util.ArrayDeque<>())) {
+                chain.add(anc);
+            }
+            chain.add(id.trim());
+        }
+        List<Map<String, Object>> layers = new ArrayList<>();
+        for (String id : chain) {
+            ProtocolRegistry.Entry e = registry.get(id);
+            Map<String, Object> layer = new LinkedHashMap<>();
+            layer.put("protocol", id);
+            layer.put("fields", templateFields(e.type().getDeclaredConstructor().newInstance()));
+            layers.add(layer);
+        }
+        return Map.of("layers", layers);
+    }
+
+    /** 回溯协议到根的祖先序列(根在前);多条绑定取注册顺序第一条,环/超深防御 32 层。 */
+    private List<String> ancestorsOf(String id, java.util.Deque<String> seen) {
+        ProtocolRegistry.Entry e = registry.get(id);
+        if (e == null || seen.contains(id) || seen.size() > 32) {
+            return List.of();
+        }
+        seen.push(id);
+        try {
+            com.netproto.annotation.BindOn[] binds =
+                    e.type().getAnnotationsByType(com.netproto.annotation.BindOn.class);
+            if (binds.length == 0) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>(ancestorsOf(binds[0].parent(), seen));
+            out.add(binds[0].parent());
+            return out;
+        } finally {
+            seen.pop();
+        }
+    }
+
+    /** 实例化对象的字段默认值。排除:被本层其他字段引用的长度/计数指示字段(编码器算)、
+     *  校验和、payload;带 lengthField 的变长内容字段(如 LLVAR 的 PAN)保留给用户填。 */
+    private static Map<String, Object> templateFields(Object instance) {
+        // 收集被引用的指示字段名(lengthField/countField 指向谁,谁就是自动的)
+        java.util.Set<String> indicators = new java.util.HashSet<>();
+        for (Field f : instance.getClass().getDeclaredFields()) {
+            ProtocolField ann = f.getAnnotation(ProtocolField.class);
+            if (ann == null) {
+                continue;
+            }
+            if (!ann.lengthField().isEmpty()) {
+                indicators.add(ann.lengthField());
+            }
+            if (!ann.countField().isEmpty()) {
+                indicators.add(ann.countField());
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Field f : instance.getClass().getDeclaredFields()) {
+            ProtocolField ann = f.getAnnotation(ProtocolField.class);
+            if (ann == null || f.isAnnotationPresent(Payload.class)
+                    || f.isAnnotationPresent(com.netproto.annotation.ChecksumField.class)
+                    || indicators.contains(f.getName())) {
+                continue;
+            }
+            f.setAccessible(true);
+            Object v;
+            try {
+                v = f.get(instance);
+            } catch (IllegalAccessException ex) {
+                continue;
+            }
+            if (v instanceof byte[] || v instanceof java.util.List || v instanceof java.util.Set) {
+                continue;   // 列表/字节载荷留空,由用户按需填
+            }
+            out.put(f.getName(), v);
+        }
+        return out;
+    }
+
     private static List<Map<String, Object>> fieldMeta(Class<?> type) {
         List<Map<String, Object>> fields = new ArrayList<>();
         for (Field f : type.getDeclaredFields()) {
@@ -140,6 +248,31 @@ public class NetprotoController {
             }
             if (!ann.label().isEmpty()) {
                 m.put("label", ann.label());
+            }
+            // 动态模板所需的注解元数据(透传,前端表单据此显隐/自动算/锁灰)
+            if (!ann.presentIf().isEmpty()) {
+                m.put("presentIf", ann.presentIf());
+            }
+            if (!ann.lengthField().isEmpty()) {
+                m.put("lengthField", ann.lengthField());
+                m.put("lengthUnit", ann.lengthUnit().name());
+                m.put("lengthAdjust", ann.lengthAdjust());
+            }
+            if (!ann.countField().isEmpty()) {
+                m.put("countField", ann.countField());
+                m.put("countUnit", ann.countUnit().name());
+            }
+            if (ann.lengthAscii()) {
+                m.put("lengthAscii", true);
+            }
+            if (!ann.elementClass().equals(void.class)) {
+                m.put("elementClass", ann.elementClass().getSimpleName());
+            }
+            if (f.isAnnotationPresent(com.netproto.annotation.ChecksumField.class)) {
+                m.put("checksum", true);
+            }
+            if (f.isAnnotationPresent(com.netproto.annotation.Payload.class)) {
+                m.put("payload", true);
             }
             // 位标志字段:暴露每个标志的掩码(Wireshark 式逐位展开的依据),按掩码降序 = 树中高位在前
             if (ann.flagClass() != void.class) {
@@ -197,10 +330,29 @@ public class NetprotoController {
     @GetMapping("/packets")
     public List<Map<String, Object>> packets(@RequestParam(defaultValue = "100") int limit) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (DecodedPacket p : capture.recent(limit)) {
-            out.add(toJson(p));
+        for (com.netproto.spring.capture.FrameSummary s : capture.recent(limit)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("seq", s.seq());
+            m.put("ts", s.ts());
+            m.put("iface", s.iface());
+            m.put("len", s.len());
+            m.put("path", s.path());
+            m.put("layerIds", s.layerIds());
+            m.put("src", s.src());
+            m.put("dst", s.dst());
+            m.put("srcPort", s.srcPort());
+            m.put("dstPort", s.dstPort());
+            m.put("info", s.info());
+            out.add(m);
         }
         return out;
+    }
+
+    /** 单帧完整详情(树/字段/字节区间/hex):摘要不常驻解析树,按需重解码(Wireshark 点击时解析)。 */
+    @GetMapping("/packet/{seq}")
+    public ResponseEntity<Map<String, Object>> packetDetail(@PathVariable long seq) {
+        com.netproto.stack.DecodedPacket p = capture.detail(seq);
+        return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toJson(p));
     }
 
     /** SSE 保活调度:只往各连接队列投 keepalive 标记,实际发送由各连接的写线程完成。 */
@@ -216,6 +368,8 @@ public class NetprotoController {
     /**
      * SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发具名 ping 事件)。
      * <p>
+     * 推送轻量 {@link com.netproto.spring.capture.FrameSummary}(单帧约两百字节,不含协议树/hex);
+     * 详情由前端点击时经 GET /packet/{seq} 按需拉取。
      * 发送绝不跑在抓包线程上:监听器只往有界队列投递,每连接一个单写线程串行发送
      * (包 + ping 同通道,SseEmitter 并发 send 非线程安全)。队列满则丢弃本连接的
      * 新帧——冻结/慢速的浏览器只丢自己的画面,不会把背压传导回采集管线。
@@ -226,7 +380,7 @@ public class NetprotoController {
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
         SseEmitter emitter = new SseEmitter(0L);
-        BlockingQueue<Object> queue = new ArrayBlockingQueue<>(512);
+        BlockingQueue<Object> queue = new ArrayBlockingQueue<>(2048);
         var writer = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "netproto-sse-writer");
             t.setDaemon(true);
@@ -234,7 +388,7 @@ public class NetprotoController {
         });
         ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(
                 () -> queue.offer(KEEPALIVE), 15, 15, TimeUnit.SECONDS);
-        Consumer<DecodedPacket> listener = queue::offer;
+        Consumer<com.netproto.spring.capture.FrameSummary> listener = queue::offer;
         var closed = new java.util.concurrent.atomic.AtomicBoolean(false);
         Runnable cleanup = () -> {
             if (!closed.compareAndSet(false, true)) {
@@ -248,9 +402,9 @@ public class NetprotoController {
             try {
                 while (true) {
                     Object item = queue.take();
-                    if (item instanceof DecodedPacket p) {
+                    if (item instanceof com.netproto.spring.capture.FrameSummary s) {
                         emitter.send(SseEmitter.event().name("packet")
-                                .data(objectMapper.writeValueAsString(toJson(p)), MediaType.APPLICATION_JSON));
+                                .data(objectMapper.writeValueAsString(s), MediaType.APPLICATION_JSON));
                     } else {
                         emitter.send(SseEmitter.event().name("ping"));
                     }
@@ -281,6 +435,12 @@ public class NetprotoController {
         return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
     }
 
+    /** 发包被系统/驱动拒绝 → 502 + 可行动的原因(权限/Wi-Fi 限制等)。 */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> sendRejected(IllegalStateException e) {
+        return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));
+    }
+
     // ---- 报文注入(不经过网卡:直接进解析+展示管线) ----
 
     /** {hex: "aa bb ..", iface?: "inject"} 注入原始字节帧,页面经 SSE 实时看到解析结果。 */
@@ -304,27 +464,41 @@ public class NetprotoController {
 
     // ---- pcap 导出/导入(与 tcpdump/Wireshark 互通) ----
 
-    /** 导出环形缓冲(最近 ring-size 帧,旧→新)为标准 pcap,Ethernet 链路。 */
+    /** 导出环形缓冲(旧→新)为标准 pcap,Ethernet 链路;文件名带帧数。 */
     @GetMapping("/export")
     public ResponseEntity<byte[]> exportPcap() {
-        List<DecodedPacket> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
+        List<com.netproto.spring.capture.FrameSummary> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
         List<PcapFile.Record> records = new ArrayList<>(newest.size());
         for (int i = newest.size() - 1; i >= 0; i--) {
-            DecodedPacket p = newest.get(i);
-            records.add(new PcapFile.Record(p.timestampMillis(), p.raw()));
+            com.netproto.spring.capture.FrameSummary s = newest.get(i);
+            records.add(new PcapFile.Record(s.ts(), s.raw()));
         }
+        String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header("Content-Disposition", "attachment; filename=netproto-export.pcap")
+                .header("Content-Disposition",
+                        "attachment; filename=netproto-" + records.size() + "f-" + ts + ".pcap")
                 .body(PcapFile.write(records));
     }
 
-    /** 导入 pcap(仅以太网链路):逐帧走「解析 → 缓冲 → SSE」管线,时间戳取文件内原始值。 */
+    /** pcap 导入大小上限:multipart 超过该值直接拒绝,防超大文件占住容器临时目录。 */
+    private static final int MAX_IMPORT_BYTES = 64 * 1024 * 1024;
+
+    /** 导入 pcap(仅以太网链路):「打开文件」语义——先清空环形缓冲再注入,时间戳取文件内原始值。
+     *  采集运行中拒绝(seq 会与导入帧冲突)。 */
     @PostMapping("/import")
     public Map<String, Object> importPcap(@RequestParam("file") MultipartFile file) throws IOException {
+        if (capture.isRunning()) {
+            throw new IllegalArgumentException("capture is running: stop it before importing a pcap");
+        }
+        if (file.getSize() > MAX_IMPORT_BYTES) {
+            throw new IllegalArgumentException("pcap too large: " + file.getSize()
+                    + " bytes (max " + MAX_IMPORT_BYTES + ")");
+        }
         List<PcapFile.Record> records = PcapFile.read(file.getBytes());
         String source = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
                 ? "import" : file.getOriginalFilename();
+        capture.reset();
         for (PcapFile.Record r : records) {
             capture.inject(source, r.raw(), r.tsMillis());
         }
@@ -349,7 +523,15 @@ public class NetprotoController {
         for (Map<String, Object> spec : layerSpecs) {
             layers.add(bindLayer((String) spec.get("protocol"), (Map<String, Object>) spec.get("fields")));
         }
-        int sent = sender.send(iface, layers);
+        int sent;
+        try {
+            sent = sender.send(iface, layers);
+        } catch (org.pcap4j.core.PcapNativeException e) {
+            // Windows 上最常见原因:Npcap 管理员限制 / Wi-Fi 网卡拒绝裸帧注入(错误 31)
+            throw new IllegalStateException("发包被系统拒绝:" + e.getMessage()
+                    + "。常见原因:①应用未以管理员身份运行(Npcap 默认限制发包权限);"
+                    + "②Wi-Fi 网卡通常不支持原始帧注入,建议改用有线网卡。", e);
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "sent");
         out.put("bytes", sent);

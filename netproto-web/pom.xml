@@ -16,12 +16,7 @@
             <groupId>com.netproto</groupId>
             <artifactId>netproto-core</artifactId>
         </dependency>
-        <!-- 内置协议栈可选:未引入时 builtin-packages 扫描降级为空,用户可自带协议栈 -->
-        <dependency>
-            <groupId>com.netproto</groupId>
-            <artifactId>netproto-protocols</artifactId>
-            <optional>true</optional>
-        </dependency>
+        <!-- 内置协议栈随 core 提供(builtin-packages 扫描 com.netproto.protocols.builtin) -->
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -47,13 +42,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- 本模块测试需要内置栈验证装配(仅测试可见,对使用方仍是可选) -->
-        <dependency>
-            <groupId>com.netproto</groupId>
-            <artifactId>netproto-protocols</artifactId>
-            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

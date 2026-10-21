@@ -26,8 +26,8 @@ const sseText = computed(() =>
 
 <template>
   <footer class="bar">
-    <span class="num">缓冲 {{ store.packets.length }}</span>
-    <span class="num">显示 {{ filteredNewestFirst.length }}</span>
+    <span class="num" title="缓冲容量:后端 ring-size 配置(实际驻留还受 ring-bytes 字节预算约束)">缓冲 {{ store.config.ringSize }}</span>
+    <span class="num" title="当前列表行数(过滤后)">显示 {{ filteredNewestFirst.length }}</span>
     <span v-if="rate" class="num">{{ rate }} 帧/秒</span>
     <span class="flex1"></span>
     <span v-if="store.captureRunning && ifaceLabel" class="dim">{{ ifaceLabel }}</span>

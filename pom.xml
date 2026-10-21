@@ -17,7 +17,6 @@
 
     <modules>
         <module>netproto-core</module>
-        <module>netproto-protocols</module>
         <module>netproto-web</module>
     </modules>
 
@@ -31,11 +30,6 @@
             <dependency>
                 <groupId>com.netproto</groupId>
                 <artifactId>netproto-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.netproto</groupId>
-                <artifactId>netproto-protocols</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

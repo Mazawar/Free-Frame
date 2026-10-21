@@ -29,21 +29,41 @@ function protoChip(p: PacketSummary) {
   return h('span', { style: base }, (segs[0] ?? id).toUpperCase())
 }
 
-const columns: DataTableColumns<PacketSummary> = [
-  { title: 'No.', key: 'seq', width: 72, render: r => h('span', { class: 'num' }, String(r.seq)) },
-  { title: '时间', key: 'ts', width: 100, render: r => h('span', { class: 'num dim' }, fmtTime(r.ts)) },
-  { title: '源地址', key: 'src', width: 170, render: r => h('span', { class: 'mono' }, r.src) },
-  {
-    title: '目标地址', key: 'dst', width: 170,
-    render: r => h('span', { class: 'mono' }, r.dst),
-  },
-  { title: '协议', key: 'proto', width: 120, render: protoChip },
-  { title: '长度', key: 'len', width: 60, render: r => h('span', { class: 'num dim' }, String(r.len)) },
+// ---- 列宽:可拖拽 + localStorage 持久化 ----
+const WIDTH_KEY = 'netproto.colWidths.v1'
+const COL_MIN: Record<string, number> = { seq: 52, ts: 70, src: 90, dst: 90, proto: 60, len: 44 }
+const DEFAULT_WIDTHS: Record<string, number> = { seq: 72, ts: 100, src: 170, dst: 170, proto: 120, len: 60 }
+const widths = ref<Record<string, number>>({ ...DEFAULT_WIDTHS, ...loadWidths() })
+
+function loadWidths(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(WIDTH_KEY) ?? '{}') } catch { return {} }
+}
+
+/** 拖拽回调(limitedWidth 已按 min/max 钳制):更新列宽并持久化。 */
+function onColResize(_w: number, limited: number, column: { key?: string | number }) {
+  if (column.key == null) return
+  widths.value[column.key] = limited
+  try { localStorage.setItem(WIDTH_KEY, JSON.stringify(widths.value)) } catch { /* 配额满:忽略 */ }
+}
+
+const columns = computed<DataTableColumns<PacketSummary>>(() => [
+  { title: 'No.', key: 'seq', width: widths.value.seq, minWidth: COL_MIN.seq, resizable: true,
+    render: r => h('span', { class: 'num' }, String(r.seq)) },
+  { title: '时间', key: 'ts', width: widths.value.ts, minWidth: COL_MIN.ts, resizable: true,
+    render: r => h('span', { class: 'num dim' }, fmtTime(r.ts)) },
+  { title: '源地址', key: 'src', width: widths.value.src, minWidth: COL_MIN.src, resizable: true,
+    render: r => h('span', { class: 'mono' }, r.src) },
+  { title: '目标地址', key: 'dst', width: widths.value.dst, minWidth: COL_MIN.dst, resizable: true,
+    render: r => h('span', { class: 'mono' }, r.dst) },
+  { title: '协议', key: 'proto', width: widths.value.proto, minWidth: COL_MIN.proto, resizable: true,
+    render: protoChip },
+  { title: '长度', key: 'len', width: widths.value.len, minWidth: COL_MIN.len, resizable: true,
+    render: r => h('span', { class: 'num dim' }, String(r.len)) },
   {
     title: '信息', key: 'info', ellipsis: { tooltip: true },
     render: r => h('span', { class: 'info' }, r.info),
   },
-]
+])
 
 const rowProps = (r: PacketSummary) => ({
   style: 'cursor:pointer',
@@ -77,6 +97,7 @@ function t0() {
     virtual-scroll
     flex-height style="height: 100%"
     size="small" :single-line="false"
+    @unstable-column-resize="onColResize"
   >
     <template #empty>
       <div class="empty">
@@ -98,6 +119,12 @@ function t0() {
    小数行高会把最后一行切在滚动底部折叠线下(显示"少一行") */
 :deep(.n-data-table-tr) { height: 26px; }
 :deep(.n-data-table-td) { line-height: 20px; padding-top: 3px; padding-bottom: 3px; }
+/* 单行不换行:放不下的单元格省略号截断(完整内容在详情面板) */
+:deep(.n-data-table-td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 :deep(.n-data-table-tr.sel .n-data-table-td) {
   background: #1e3a5f !important;
 }

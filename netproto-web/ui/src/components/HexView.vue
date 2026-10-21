@@ -9,9 +9,10 @@ const emit = defineEmits<{ (e: 'byte-click', idx: number): void }>()
 const rows = computed(() => hexRows(props.packet))
 const rootEl = ref<HTMLElement | null>(null)
 
-/** 选中区外框(SVG 多边形顶点):沿各行选区首尾字节取点,一条闭合路径画出
- *  阶梯形大轮廓 —— 跨行、行间空隙全部包在框内,无矩形拼接缝。 */
-const poly = ref<[number, number][]>([])
+/** 选中区外框(SVG 多边形顶点):hex 区与 ASCII 区各一条闭合路径,沿各行选区
+ *  首尾字节取点画出阶梯形大轮廓 —— 跨行、行间空隙全部包在框内,无拼接缝。 */
+const hexPoly = ref<[number, number][]>([])
+const asciiPoly = ref<[number, number][]>([])
 const svgW = ref(0)
 const svgH = ref(0)
 
@@ -22,22 +23,16 @@ function inLayer(idx: number): boolean {
   return h != null && idx >= h[0] && idx < h[1]
 }
 
-async function measurePolygon() {
-  await nextTick()
-  const el = rootEl.value
-  const h = props.highlight
-  if (!el || h == null || h[1] <= h[0]) {
-    poly.value = []
-    return
-  }
+/** 按 attr(data-byte / data-abyte)测量一列的选中阶梯轮廓。 */
+function buildPts(el: HTMLElement, h: [number, number], attr: string): [number, number][] {
   const sRow = Math.floor(h[0] / BYTE_COLS)
   const eRow = Math.floor((h[1] - 1) / BYTE_COLS)
   const segs: { xl: number; xr: number; top: number; bot: number }[] = []
   for (let r = sRow; r <= eRow; r++) {
     const s = Math.max(h[0], r * BYTE_COLS)
     const e = Math.min(h[1], (r + 1) * BYTE_COLS)
-    const a = el.querySelector(`[data-byte="${s}"]`)
-    const b = el.querySelector(`[data-byte="${e - 1}"]`)
+    const a = el.querySelector(`[data-${attr}="${s}"]`)
+    const b = el.querySelector(`[data-${attr}="${e - 1}"]`)
     if (!(a instanceof HTMLElement) || !(b instanceof HTMLElement)) continue
     segs.push({
       xl: a.offsetLeft,
@@ -46,11 +41,8 @@ async function measurePolygon() {
       bot: a.offsetTop + a.offsetHeight + 1,
     })
   }
-  if (!segs.length) {
-    poly.value = []
-    return
-  }
-  // 相邻行精确对接:中间行底边 = 下一行顶边(行高与格高一致,行间无缝)
+  if (!segs.length) return []
+  // 相邻行精确对接:中间行底边 = 下一行顶边
   for (let i = 0; i < segs.length - 1; i++) segs[i]!.bot = segs[i + 1]!.top
 
   const pts: [number, number][] = []
@@ -66,12 +58,26 @@ async function measurePolygon() {
     if (i < segs.length - 1) pts.push([segs[i + 1]!.xl, segs[i]!.bot])  // 左缘上行肘点
     pts.push([segs[i]!.xl, segs[i]!.bot])                           // 本行左下角
   }
-  poly.value = pts
+  return pts
+}
+
+async function measurePolygon() {
+  await nextTick()
+  const el = rootEl.value
+  const h = props.highlight
+  if (!el || h == null || h[1] <= h[0]) {
+    hexPoly.value = []
+    asciiPoly.value = []
+    return
+  }
+  hexPoly.value = buildPts(el, h, 'byte')
+  asciiPoly.value = buildPts(el, h, 'abyte')
   svgW.value = el.scrollWidth
   svgH.value = el.scrollHeight
 }
 
-const polyStr = computed(() => poly.value.map(p => p.join(',')).join(' '))
+const hexPolyStr = computed(() => hexPoly.value.map(p => p.join(',')).join(' '))
+const asciiPolyStr = computed(() => asciiPoly.value.map(p => p.join(',')).join(' '))
 
 watch(() => [props.highlight, rows.value] as const, () => { void measurePolygon() })
 onMounted(() => { void measurePolygon() })
@@ -93,13 +99,16 @@ onMounted(() => { void measurePolygon() })
       <span class="ascii">
         <span v-for="(c, i) in row.cells" :key="'a' + i"
               class="cell"
+              :class="{ lhl: inLayer(row.offset + i) }"
               :style="c.color ? `color:${c.color}` : 'color:#484f58'"
+              :data-abyte="row.offset + i"
               @click="emit('byte-click', row.offset + i)">{{ c.ascii }}</span>
       </span>
     </div>
-    <!-- 选中区外框:一条闭合多边形(阶梯轮廓),字节色完整保留 -->
-    <svg v-if="poly.length" class="hl-svg" :width="svgW" :height="svgH" aria-hidden="true">
-      <polygon :points="polyStr" />
+    <!-- 选中区外框:hex 与 ASCII 各一条闭合多边形(阶梯轮廓),字节色完整保留 -->
+    <svg v-if="hexPoly.length" class="hl-svg" :width="svgW" :height="svgH" aria-hidden="true">
+      <polygon :points="hexPolyStr" />
+      <polygon v-if="asciiPoly.length" :points="asciiPolyStr" />
     </svg>
   </div>
 </template>

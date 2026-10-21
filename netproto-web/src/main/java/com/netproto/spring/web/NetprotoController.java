@@ -1,5 +1,6 @@
 package com.netproto.spring.web;
 
+import com.netproto.annotation.Payload;
 import com.netproto.annotation.Protocol;
 import com.netproto.annotation.ProtocolField;
 import com.netproto.spring.capture.CaptureEngine;
@@ -137,6 +138,99 @@ public class NetprotoController {
         }
     }
 
+    /**
+     * 发包模板生成:GET /template?path=mqtt-connect → 按分派树推导祖先链
+     * (ethernet▸ipv4▸tcp▸mqtt-connect)并实例化各层 POJO 取字段默认值。
+     * 只给「用户可填」的字段值;长度/计数/校验和等编码期自动的字段省略(编码器会补)。
+     */
+    @GetMapping("/template")
+    public Map<String, Object> template(@RequestParam String path) throws Exception {
+        String[] ids = path.split(",");
+        for (String id : ids) {
+            if (registry.get(id.trim()) == null) {
+                throw new IllegalArgumentException("unknown protocol: " + id);
+            }
+        }
+        // 从最深层向上推导祖先:每层取一条 @BindOn 链回溯到根,去重
+        LinkedHashSet<String> chain = new LinkedHashSet<>();
+        for (String id : ids) {
+            for (String anc : ancestorsOf(id.trim(), new java.util.ArrayDeque<>())) {
+                chain.add(anc);
+            }
+            chain.add(id.trim());
+        }
+        List<Map<String, Object>> layers = new ArrayList<>();
+        for (String id : chain) {
+            ProtocolRegistry.Entry e = registry.get(id);
+            Map<String, Object> layer = new LinkedHashMap<>();
+            layer.put("protocol", id);
+            layer.put("fields", templateFields(e.type().getDeclaredConstructor().newInstance()));
+            layers.add(layer);
+        }
+        return Map.of("layers", layers);
+    }
+
+    /** 回溯协议到根的祖先序列(根在前);多条绑定取注册顺序第一条,环/超深防御 32 层。 */
+    private List<String> ancestorsOf(String id, java.util.Deque<String> seen) {
+        ProtocolRegistry.Entry e = registry.get(id);
+        if (e == null || seen.contains(id) || seen.size() > 32) {
+            return List.of();
+        }
+        seen.push(id);
+        try {
+            com.netproto.annotation.BindOn[] binds =
+                    e.type().getAnnotationsByType(com.netproto.annotation.BindOn.class);
+            if (binds.length == 0) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>(ancestorsOf(binds[0].parent(), seen));
+            out.add(binds[0].parent());
+            return out;
+        } finally {
+            seen.pop();
+        }
+    }
+
+    /** 实例化对象的字段默认值。排除:被本层其他字段引用的长度/计数指示字段(编码器算)、
+     *  校验和、payload;带 lengthField 的变长内容字段(如 LLVAR 的 PAN)保留给用户填。 */
+    private static Map<String, Object> templateFields(Object instance) {
+        // 收集被引用的指示字段名(lengthField/countField 指向谁,谁就是自动的)
+        java.util.Set<String> indicators = new java.util.HashSet<>();
+        for (Field f : instance.getClass().getDeclaredFields()) {
+            ProtocolField ann = f.getAnnotation(ProtocolField.class);
+            if (ann == null) {
+                continue;
+            }
+            if (!ann.lengthField().isEmpty()) {
+                indicators.add(ann.lengthField());
+            }
+            if (!ann.countField().isEmpty()) {
+                indicators.add(ann.countField());
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Field f : instance.getClass().getDeclaredFields()) {
+            ProtocolField ann = f.getAnnotation(ProtocolField.class);
+            if (ann == null || f.isAnnotationPresent(Payload.class)
+                    || f.isAnnotationPresent(com.netproto.annotation.ChecksumField.class)
+                    || indicators.contains(f.getName())) {
+                continue;
+            }
+            f.setAccessible(true);
+            Object v;
+            try {
+                v = f.get(instance);
+            } catch (IllegalAccessException ex) {
+                continue;
+            }
+            if (v instanceof byte[] || v instanceof java.util.List || v instanceof java.util.Set) {
+                continue;   // 列表/字节载荷留空,由用户按需填
+            }
+            out.put(f.getName(), v);
+        }
+        return out;
+    }
+
     private static List<Map<String, Object>> fieldMeta(Class<?> type) {
         List<Map<String, Object>> fields = new ArrayList<>();
         for (Field f : type.getDeclaredFields()) {
@@ -154,6 +248,31 @@ public class NetprotoController {
             }
             if (!ann.label().isEmpty()) {
                 m.put("label", ann.label());
+            }
+            // 动态模板所需的注解元数据(透传,前端表单据此显隐/自动算/锁灰)
+            if (!ann.presentIf().isEmpty()) {
+                m.put("presentIf", ann.presentIf());
+            }
+            if (!ann.lengthField().isEmpty()) {
+                m.put("lengthField", ann.lengthField());
+                m.put("lengthUnit", ann.lengthUnit().name());
+                m.put("lengthAdjust", ann.lengthAdjust());
+            }
+            if (!ann.countField().isEmpty()) {
+                m.put("countField", ann.countField());
+                m.put("countUnit", ann.countUnit().name());
+            }
+            if (ann.lengthAscii()) {
+                m.put("lengthAscii", true);
+            }
+            if (!ann.elementClass().equals(void.class)) {
+                m.put("elementClass", ann.elementClass().getSimpleName());
+            }
+            if (f.isAnnotationPresent(com.netproto.annotation.ChecksumField.class)) {
+                m.put("checksum", true);
+            }
+            if (f.isAnnotationPresent(com.netproto.annotation.Payload.class)) {
+                m.put("payload", true);
             }
             // 位标志字段:暴露每个标志的掩码(Wireshark 式逐位展开的依据),按掩码降序 = 树中高位在前
             if (ann.flagClass() != void.class) {
@@ -316,6 +435,12 @@ public class NetprotoController {
         return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
     }
 
+    /** 发包被系统/驱动拒绝 → 502 + 可行动的原因(权限/Wi-Fi 限制等)。 */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> sendRejected(IllegalStateException e) {
+        return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));
+    }
+
     // ---- 报文注入(不经过网卡:直接进解析+展示管线) ----
 
     /** {hex: "aa bb ..", iface?: "inject"} 注入原始字节帧,页面经 SSE 实时看到解析结果。 */
@@ -398,7 +523,15 @@ public class NetprotoController {
         for (Map<String, Object> spec : layerSpecs) {
             layers.add(bindLayer((String) spec.get("protocol"), (Map<String, Object>) spec.get("fields")));
         }
-        int sent = sender.send(iface, layers);
+        int sent;
+        try {
+            sent = sender.send(iface, layers);
+        } catch (org.pcap4j.core.PcapNativeException e) {
+            // Windows 上最常见原因:Npcap 管理员限制 / Wi-Fi 网卡拒绝裸帧注入(错误 31)
+            throw new IllegalStateException("发包被系统拒绝:" + e.getMessage()
+                    + "。常见原因:①应用未以管理员身份运行(Npcap 默认限制发包权限);"
+                    + "②Wi-Fi 网卡通常不支持原始帧注入,建议改用有线网卡。", e);
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "sent");
         out.put("bytes", sent);

@@ -120,6 +120,26 @@ class NetprotoPcapTest {
     }
 
     @Test
+    void templateEndpointBuildsChainWithDefaults() throws Exception {
+        // 目标 tcp(本上下文仅注册内置栈)→ 自动推导 ethernet▸ipv4▸tcp 三层
+        mockMvc.perform(get("/api/netproto/template").param("path", "tcp"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.layers.length()").value(3))
+                .andExpect(jsonPath("$.layers[0].protocol").value("ethernet"))
+                .andExpect(jsonPath("$.layers[1].protocol").value("ipv4"))
+                .andExpect(jsonPath("$.layers[2].protocol").value("tcp"))
+                // 默认值来自 POJO 字段初始值(tcp.dataOffset=5, ipv4.ttl=64)
+                .andExpect(jsonPath("$.layers[2].fields.dataOffset").value(5))
+                .andExpect(jsonPath("$.layers[1].fields.ttl").value(64))
+                // 自动字段(@ChecksumField 校验和)不进模板;tcp.checksum 无注解属普通字段,保留
+                .andExpect(jsonPath("$.layers[1].fields.headerChecksum").doesNotExist())
+                .andExpect(jsonPath("$.layers[2].fields.checksum").value(0));
+
+        mockMvc.perform(get("/api/netproto/template").param("path", "no-such-proto"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void importReplacesExistingRingContents() throws Exception {
         // 先导入 2 帧
         byte[] frame = {0x33, 0x33, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0x12, 0x34, 1, 2};

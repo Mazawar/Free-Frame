@@ -32,6 +32,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ iface, layers }),
     }).then(r => json<{ status: string; bytes: number }>(r)),
+  template: (path: string) =>
+    fetch(`/api/netproto/template?path=${encodeURIComponent(path)}`)
+      .then(r => json<{ layers: { protocol: string; fields: Record<string, unknown> }[] }>(r)),
   importPcap: (file: File) => {
     const form = new FormData()
     form.append('file', file)

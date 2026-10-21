@@ -163,7 +163,7 @@ function selectAll() {
           </div>
           <!-- 协议行 -->
           <label v-else-if="item.row" class="row" :title="item.row.id"
-                 :style="{ paddingLeft: 6 + (item.depth + 1) * 14 + 'px' }">
+                 :style="{ paddingLeft: 6 + item.depth * 14 + 'px' }">
             <n-checkbox size="small"
                         :checked="store.enabled.has(item.row.id)"
                         :on-update:checked="(v: boolean) => toggle(item.row!.id, v)" />

@@ -8,77 +8,73 @@ const emit = defineEmits<{ (e: 'byte-click', idx: number): void }>()
 
 const rows = computed(() => hexRows(props.packet))
 const rootEl = ref<HTMLElement | null>(null)
-/** 选中区外框:跨行时拆成 首段/中段/尾段 三个精确对接的矩形,边框只画外圈,视觉上是一个大框 */
-const boxes = ref<{ x: number; y: number; w: number; h: number; cls: string }[]>([])
+
+/** 选中区外框(SVG 多边形顶点):沿各行选区首尾字节取点,一条闭合路径画出
+ *  阶梯形大轮廓 —— 跨行、行间空隙全部包在框内,无矩形拼接缝。 */
+const poly = ref<[number, number][]>([])
+const svgW = ref(0)
+const svgH = ref(0)
 
 const BYTE_COLS = 16
-
-function inHighlight(idx: number): boolean {
-  const h = props.highlight
-  return h != null && idx >= h[0] && idx < h[1]
-}
 
 function inLayer(idx: number): boolean {
   const h = props.layerHl
   return h != null && idx >= h[0] && idx < h[1]
 }
 
-/**
- * 选中区外框测量:对 选中首字节、选中尾字节、各完整中间行的首尾字节 取 DOM 盒。
- * 矩形以 .hex(overflow 容器)为定位父级,随滚动一起移动;
- * 中段矩形按字节区全宽 —— 8 字节分组间隔等「隔断」都被包进框内。
- */
-async function measureBoxes() {
+async function measurePolygon() {
   await nextTick()
   const el = rootEl.value
   const h = props.highlight
   if (!el || h == null || h[1] <= h[0]) {
-    boxes.value = []
+    poly.value = []
     return
   }
   const sRow = Math.floor(h[0] / BYTE_COLS)
   const eRow = Math.floor((h[1] - 1) / BYTE_COLS)
-  const segs: [number, number][] = []
-  if (sRow === eRow) {
-    segs.push([h[0], h[1]])
-  } else {
-    segs.push([h[0], (sRow + 1) * BYTE_COLS])
-    for (let r = sRow + 1; r < eRow; r++) segs.push([r * BYTE_COLS, (r + 1) * BYTE_COLS])
-    segs.push([eRow * BYTE_COLS, h[1]])
-  }
-  const out: { x: number; y: number; w: number; h: number; cls: string }[] = []
-  // 行距(行首到下行行首):跨行矩形的垂直延伸量,保证相邻段无缝对接
-  const rowTop = (idx: number) => {
-    const c = el.querySelector(`[data-byte="${idx}"]`)
-    return c instanceof HTMLElement ? c.offsetTop : null
-  }
-  segs.forEach(([s, e], i) => {
+  const segs: { xl: number; xr: number; top: number; bot: number }[] = []
+  for (let r = sRow; r <= eRow; r++) {
+    const s = Math.max(h[0], r * BYTE_COLS)
+    const e = Math.min(h[1], (r + 1) * BYTE_COLS)
     const a = el.querySelector(`[data-byte="${s}"]`)
     const b = el.querySelector(`[data-byte="${e - 1}"]`)
-    if (!(a instanceof HTMLElement) || !(b instanceof HTMLElement)) return
-    const row = Math.floor(s / BYTE_COLS)
-    let top = a.offsetTop - 1
-    let bottom = b.offsetTop + b.offsetHeight + 1
-    if (i < segs.length - 1) {
-      // 非最后段:向下延伸到下一行行首,填掉行间空隙(隔断/换行都包进框内)
-      const nextTop = rowTop((row + 1) * BYTE_COLS)
-      if (nextTop != null) bottom = nextTop
-    }
-    if (i > 0) top = a.offsetTop - 1
-    const first = i === 0
-    out.push({
-      x: a.offsetLeft,
-      y: top,
-      w: b.offsetLeft + b.offsetWidth - a.offsetLeft,
-      h: bottom - top,
-      cls: segs.length === 1 ? 'hl-single' : first ? 'hl-first' : i === segs.length - 1 ? 'hl-last' : 'hl-mid',
+    if (!(a instanceof HTMLElement) || !(b instanceof HTMLElement)) continue
+    segs.push({
+      xl: a.offsetLeft,
+      xr: b.offsetLeft + b.offsetWidth,
+      top: a.offsetTop - 1,
+      bot: a.offsetTop + a.offsetHeight + 1,
     })
+  }
+  if (!segs.length) {
+    poly.value = []
+    return
+  }
+  // 相邻行精确对接:中间行底边 = 下一行顶边(行高与格高一致,行间无缝)
+  for (let i = 0; i < segs.length - 1; i++) segs[i]!.bot = segs[i + 1]!.top
+
+  const pts: [number, number][] = []
+  const first = segs[0]!
+  const last = segs[segs.length - 1]!
+  pts.push([first.xl, first.top])                                   // 左上角
+  segs.forEach((s, i) => {
+    if (i > 0) pts.push([segs[i - 1]!.xr, s.top])                   // 右缘下行肘点
+    pts.push([s.xr, s.top])                                         // 本行右上角
   })
-  boxes.value = out
+  pts.push([last.xr, last.bot])                                     // 右下角
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (i < segs.length - 1) pts.push([segs[i + 1]!.xl, segs[i]!.bot])  // 左缘上行肘点
+    pts.push([segs[i]!.xl, segs[i]!.bot])                           // 本行左下角
+  }
+  poly.value = pts
+  svgW.value = el.scrollWidth
+  svgH.value = el.scrollHeight
 }
 
-watch(() => [props.highlight, rows.value] as const, () => { void measureBoxes() })
-onMounted(() => { void measureBoxes() })
+const polyStr = computed(() => poly.value.map(p => p.join(',')).join(' '))
+
+watch(() => [props.highlight, rows.value] as const, () => { void measurePolygon() })
+onMounted(() => { void measurePolygon() })
 </script>
 
 <template>
@@ -88,7 +84,7 @@ onMounted(() => { void measureBoxes() })
       <span class="cells">
         <span v-for="(c, i) in row.cells" :key="i"
               class="cell"
-              :class="{ lhl: !inHighlight(row.offset + i) && inLayer(row.offset + i), g8: i === 8 }"
+              :class="{ lhl: inLayer(row.offset + i) }"
               :style="c.color ? `color:${c.color}` : 'color:#6e7681'"
               :data-byte="row.offset + i"
               :title="`0x${(row.offset + i).toString(16).padStart(4, '0')}`"
@@ -101,9 +97,10 @@ onMounted(() => { void measureBoxes() })
               @click="emit('byte-click', row.offset + i)">{{ c.ascii }}</span>
       </span>
     </div>
-    <!-- 选中区外框:整段一个大轮廓,隔断/换行都包在框内 -->
-    <div v-for="(o, i) in boxes" :key="'b' + i" class="hl-box" :class="o.cls"
-         :style="{ left: o.x + 'px', top: o.y + 'px', width: o.w + 'px', height: o.h + 'px' }" />
+    <!-- 选中区外框:一条闭合多边形(阶梯轮廓),字节色完整保留 -->
+    <svg v-if="poly.length" class="hl-svg" :width="svgW" :height="svgH" aria-hidden="true">
+      <polygon :points="polyStr" />
+    </svg>
   </div>
 </template>
 
@@ -119,28 +116,26 @@ onMounted(() => { void measureBoxes() })
 }
 .hrow { display: flex; white-space: pre; }
 .off { color: #484f58; width: 44px; flex-shrink: 0; user-select: none; }
-.cells { width: 350px; flex-shrink: 0; }
+.cells { width: 336px; flex-shrink: 0; }   /* 16 × 21px,均匀无隔断 */
 .cell {
   display: inline-block; width: 21px;
   text-align: center;
   cursor: pointer;
   border-radius: 2px;
 }
-/* 第 9 字节起为第二组:左移出 8 字节分组间隔 */
-.cell.g8 { margin-left: 14px; }
 .cell:hover { background: rgba(177, 186, 196, .14); }
-/* 所属协议层=浅蓝铺底;选中区不再逐字节着色,由外框层统一勾边 */
+/* 所属协议层=浅蓝铺底;选中区由 SVG 多边形外框统一勾边 */
 .cell.lhl { background: rgba(31, 111, 235, .16); }
-.hl-box {
-  position: absolute; z-index: 1; pointer-events: none;
-  box-sizing: border-box;
-  border-style: solid; border-color: rgba(88, 166, 255, .95);
-  background: rgba(88, 166, 255, .07);
+.hl-svg {
+  position: absolute; top: 0; left: 0; z-index: 1;
+  pointer-events: none; overflow: visible;
 }
-.hl-box.hl-single { border-width: 1px; border-radius: 4px; }
-.hl-box.hl-first { border-width: 1px 1px 0 1px; border-radius: 4px 4px 0 0; }
-.hl-box.hl-mid { border-width: 0 1px; }
-.hl-box.hl-last { border-width: 0 1px 1px 1px; border-radius: 0 0 4px 4px; }
+.hl-svg polygon {
+  fill: rgba(88, 166, 255, .08);
+  stroke: rgba(88, 166, 255, .95);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
 .ascii { color: #484f58; padding-left: 18px; border-left: 1px solid #1b222b; }
 .ascii .cell { width: auto; padding: 0 1px; }
 </style>

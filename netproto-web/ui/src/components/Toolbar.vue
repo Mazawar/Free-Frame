@@ -18,6 +18,8 @@ async function start() {
   switching.value = true
   try {
     await api.start(store.iface, store.bpf)
+    // 后端 start 即新会话:环形缓冲已清、序号从 1 重新计数;前端同步清空,避免新旧会话序号撞车
+    clearPackets()
     await refreshStatus()
   } catch (e) {
     message.error(`启动失败:${(e as Error).message}`, { keepAliveOnHover: true, duration: 5000 })

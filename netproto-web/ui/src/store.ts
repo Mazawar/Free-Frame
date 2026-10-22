@@ -67,6 +67,7 @@ export function addPackets(batch: PacketSummary[]) {
 }
 
 export function clearPackets() {
+  pending.length = 0   // 在途 SSE 事件一并丢弃:否则 150ms 合并窗口会把旧会话的帧补回刚清空的表格
   store.packets = []
   store.selected = null
   store.detail = null

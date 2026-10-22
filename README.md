@@ -66,35 +66,13 @@ flowchart LR
 **要求**:JDK 25、Maven 3.9+;Windows 上采集/发包需安装 [Npcap](https://npcap.com/) 并以管理员身份运行。
 
 ```bash
-# 构建本分支两个库模块(含测试)
+# 构建全部模块(含测试)
 mvn install
+
 ```
 
 想直接看运行效果,切到演示分支:`git switch redesign/protocol-stack`,
 再 `mvn -pl netproto-demo spring-boot:run`,打开 http://localhost:8848/netproto/。
-
-前端源码开发(热更新,`/api` 代理到 8848):
-
-```bash
-cd netproto-web/ui
-npm install
-npm run dev          # http://localhost:5173
-npm run build        # 产物直接落进 netproto-web/src/main/resources/netproto-ui,打 jar 即带页面
-```
-
-在自己的 Spring Boot 工程里引入 starter:
-
-```xml
-<dependency>
-    <groupId>com.netproto</groupId>
-    <artifactId>netproto-web</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
-</dependency>
-```
-
-加上依赖、写好 `@Protocol` 类,启动即完成注册与装配;观测台在
-`/netproto/`(`netproto.ui-base-path` 可改),REST 在 `/api/netproto/**`,
-不占用宿主应用的根路径。
 
 ### 三分钟接入
 

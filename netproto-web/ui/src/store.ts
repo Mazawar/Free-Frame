@@ -72,20 +72,26 @@ function countPacket(p: PacketSummary, delta: number) {
 /** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用 */
 export function addPackets(batch: PacketSummary[]) {
   if (batch.length === 0) return
-  // seq 单调递增是会话内不变量;严格回退只可能是新会话(本页重启/后端重建)——先清旧帧防混排
-  if (store.captured > 0 && batch[0]!.seq < store.captured) {
+  // 后端重建:环形重新从 seq 1 计数(批首 == 1 而本页已有更高 seq)→ 清旧帧防混排。
+  // 用「批首为 1」而非「严格回退」判定:重连补拉时批首往往 < captured(环未淘汰),
+  // 严格回退会把整个缓冲误清一遍。
+  if (store.captured > 1 && batch[0]!.seq === 1) {
     store.packets = []
     counts.clear()
+    store.captured = 0
   }
+  // 幂等:重复拉取/SSE 与补拉交叠时,已见过的 seq(<= captured)直接跳过,不重行不重计
+  const fresh = batch.filter(p => p.seq > store.captured)
+  if (fresh.length === 0) return
   // 在普通副本上裁剪:避免对响应式数组 splice 逐索引触发(虚拟表格逐行订阅,量大时拖垮调度)
-  const next = store.packets.concat(batch)
+  const next = store.packets.concat(fresh)
   const overflow = next.length - maxPackets()
   if (overflow > 0) {
     for (const p of next.splice(0, overflow)) countPacket(p, -1)
   }
-  for (const p of batch) countPacket(p, +1)
+  for (const p of fresh) countPacket(p, +1)
   store.packets = next
-  store.captured = batch[batch.length - 1]!.seq
+  store.captured = fresh[fresh.length - 1]!.seq
 }
 
 export function clearPackets() {
@@ -163,7 +169,11 @@ export function connectStream() {
   if (flushTimer === undefined) flushTimer = window.setInterval(flush, 150)
   if (watchdogTimer === undefined) watchdogTimer = window.setInterval(watchdog, 5000)
   es = new EventSource(`/api/netproto/sessions/${encodeURIComponent(store.sessionId)}/stream`)
-  es.onopen = () => { store.sse = 'open'; lastPing = Date.now() }
+  es.onopen = () => {
+    store.sse = 'open'
+    lastPing = Date.now()
+    void backfillAfterOpen()
+  }
   es.addEventListener('ping', () => { lastPing = Date.now() })
   es.addEventListener('session-closed', () => {
     // 会话被删除(清扫回收/后端重启):身份保留,下次采集重新注册
@@ -180,6 +190,17 @@ export function connectStream() {
       store.sse = 'connecting'
     }
   }
+}
+
+/**
+ * 连接建立后补拉一次会话环形缓冲:兜住「恢复已完成、SSE 尚未 open」与
+ * 「断线重连期间」两个窗口里错过的帧。addPackets 幂等(seq 去重),重复无害。
+ */
+async function backfillAfterOpen() {
+  try {
+    const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000)
+    pending.push(...recent.reverse())
+  } catch { /* 会话已被回收等:忽略,SSE 仍在线 */ }
 }
 
 export async function refreshProtocols() {

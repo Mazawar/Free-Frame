@@ -1,6 +1,6 @@
 <div align="center">
 
-# netproto
+# NetProto
 
 **注解驱动的自顶向下二进制协议引擎**
 
@@ -23,7 +23,7 @@
 
 传统解析器靠手写 `if (type == X) parseX()` 串联,协议一多就不可维护;
 pcap4j 这类库把协议写死在类型体系里,新协议只能 fork。
-netproto 把「下一层是谁」也变成声明(`@BindOn(parent, when)`):
+NetProto 把「下一层是谁」也变成声明(`@BindOn(parent, when)`):
 解析一层 → 求值子绑定 → 命中则继续下降,没有命中就停在当前层,
 剩余字节原样保留 —— **未注册的流量不猜、不丢、不解析**。
 组装方向对称:`StackEncoder` 自内向外包装,选择子(EtherType / 端口 / 你的类型字段)、

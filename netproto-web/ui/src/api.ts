@@ -18,8 +18,15 @@ export const api = {
 
   // ---- 会话化采集(每页专属会话;旧 /capture、/packets 端点不再由页面使用) ----
 
-  /** 注册并启动本页会话(页面生成 id):后端不存在则创建、已停止则重启、已运行 409。
-   *  后端重启/会话被回收后凭同一 id 再注册,身份永不换。 */
+  /** 空闲注册(页面加载即占位):后端没有本会话则以该 id 创建(不启动采集),
+   *  已存在则幂等返回——后端重启/回收后凭同一 id 注册回来。 */
+  sessionRegisterIdle: (id: string) =>
+    fetch('/api/netproto/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).then(r => json<Record<string, unknown>>(r)),
+  /** 注册并启动本页会话(页面生成 id):后端不存在则创建、已停止则重启、已运行 409。 */
   sessionRegister: (id: string, iface: string, bpf: string) =>
     fetch('/api/netproto/sessions', {
       method: 'POST',

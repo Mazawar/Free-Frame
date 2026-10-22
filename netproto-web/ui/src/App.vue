@@ -65,9 +65,15 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 onMounted(async () => {
-  // 本页专属会话恢复(sessionStorage 隔离):上次未删的会话接回,数据与流都只属于本页
+  // 本页会话身份(sessionStorage 隔离):已有则接回;后端还没有(首次/后端重启)→ 立即空闲注册占位
   await restoreSession()
-  connectStream()   // 无会话时内部直接置 closed(状态栏显示"无会话")
+  if (!store.sessionLive) {
+    try {
+      await api.sessionRegisterIdle(store.sessionId)
+      store.sessionLive = true
+    } catch { /* 超上限/服务未起:停留未注册,点「采集」时会再试 */ }
+  }
+  connectStream()
   // 配置先行:缓冲上限等显示参数以它为准,恢复裁剪依赖 maxPackets
   try {
     const c = await api.config()

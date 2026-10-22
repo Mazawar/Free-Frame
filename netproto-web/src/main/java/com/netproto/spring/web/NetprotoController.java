@@ -395,12 +395,18 @@ public class NetprotoController {
         return out;
     }
 
-    /** 创建/注册并启动会话 {iface, bpf?, id?}:带 id(页面生成的 UUID)= 注册语义
-     *  (不存在创建、已停止重启、已在运行 409);不带 id = 后端自动命名(s1、s2…)。 */
+    /** 会话注册端点:带 iface = 创建/重启并启动采集;只带 id = 空闲注册(页面加载即占位,
+     *  不启动采集);都不带 = 400。无 id 时后端自动命名(s1、s2…)。 */
     @PostMapping("/sessions")
     public Map<String, Object> createSession(@RequestBody Map<String, String> body) throws Exception {
-        String iface = requiredIface(body);
         String id = body.get("id");
+        String iface = body.get("iface");
+        if (iface == null || iface.isBlank()) {
+            if (id == null || id.isBlank()) {
+                throw new IllegalArgumentException("iface is required (or pass id to idle-register)");
+            }
+            return sessions.registerIdle(id.trim()).status();
+        }
         if (id != null && !id.isBlank()) {
             id = id.trim();
             CaptureSession existing = sessions.get(id);

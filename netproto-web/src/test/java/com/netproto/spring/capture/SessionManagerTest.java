@@ -165,6 +165,35 @@ class SessionManagerTest {
     }
 
     @Test
+    void idleRegisterCreatesWithoutStarting() throws Exception {
+        StackDecoder decoder = newDecoder();
+        var starts = new int[1];
+        SessionManager mgr = new SessionManager(decoder, 100, 64 * 1024, 65536, 4) {
+            @Override
+            protected CaptureSession newSession(String id) {
+                return new CaptureSession(id, decoder, 100, 64 * 1024, 65536) {
+                    @Override
+                    public void start(String iface, String bpf) {
+                        starts[0]++;
+                    }
+                };
+            }
+        };
+        // 空闲注册(页面加载即占位):不启动采集;重复注册幂等返回同一对象
+        CaptureSession s = mgr.registerIdle("page-uuid-1234");
+        assertNotNull(s);
+        assertFalse(s.isRunning());
+        assertEquals(0, starts[0]);
+        assertSame(s, mgr.registerIdle("page-uuid-1234"));
+        // 之后带网卡注册 = 启动采集(同一会话)
+        mgr.register("page-uuid-1234", "lo", "");
+        assertEquals(1, starts[0]);
+        // id 规则同 register
+        assertThrows(IllegalArgumentException.class, () -> mgr.registerIdle("default"));
+        assertThrows(IllegalArgumentException.class, () -> mgr.registerIdle("bad id"));
+    }
+
+    @Test
     void idleSessionsWithoutViewersAreReaped() throws Exception {
         StackDecoder decoder = newDecoder();
         // grace=200ms:手动调 sweepIdleSessions 验证回收规则(定时器也会跑,不影响断言)

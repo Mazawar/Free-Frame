@@ -18,7 +18,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "dev", name = "设备通信", group = "设备通信", internal = true)
+@Protocol(id = "dev", name = "设备通信", group = "设备通信")
 @BindOn(parent = "udp", when = "dstPort == 9001 || srcPort == 9001")
 public class DevFrame implements PayloadAware {
 

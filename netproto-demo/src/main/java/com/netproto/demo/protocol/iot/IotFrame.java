@@ -17,7 +17,7 @@ import lombok.ToString;
  */
 @Data
 @ToString
-@Protocol(id = "iot", name = "水利设备接入", group = "物联网", internal = true)
+@Protocol(id = "iot", name = "水利设备接入", group = "物联网")
 @BindOn(parent = "udp", when = "dstPort == 9002 || srcPort == 9002")
 public class IotFrame implements PayloadAware {
 

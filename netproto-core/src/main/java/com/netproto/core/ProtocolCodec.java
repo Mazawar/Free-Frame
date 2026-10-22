@@ -28,10 +28,17 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         int layerEndBits;
         /** 最近一次 deserialize 实际消耗的位数(LIST 元素步进用,替代反向序列化测长)。 */
         int lastConsumedBits;
+        /** 本线程是否记录位区间:采集热路径不需要(UI 详情按需重解码),关掉可省每字段 int[2]+map 写入。 */
+        boolean trackRanges = true;
     }
 
     private DecodeState st() {
         return state.get();
+    }
+
+    /** 控制当前线程的位区间记录(采集热路径关闭,详情重解码开启;结束后请恢复 true)。 */
+    public void setTrackRanges(boolean on) {
+        st().trackRanges = on;
     }
 
     /** 构造期解析一次(此前每次 deserialize 都 getDeclaredConstructor + setAccessible)。 */
@@ -279,7 +286,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
             BitCursor cursor = new BitCursor(rawData, offset);
             s.layerEndBits = length * 8;
-            s.lastFieldRanges.clear();
+            if (s.trackRanges) {
+                s.lastFieldRanges.clear();
+            }
             int payloadStartBits = -1;   // 长度驱动 @Payload 的起始位(分派入口)
 
             for (FieldInfo fi : fixedFields) {
@@ -297,7 +306,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     }
                     byte[] pval = cursor.readBytes((int) psize);   // readBytes 收位(BYTES 语义)
                     fi.field.set(obj, pval);
-                    s.lastFieldRanges.put(fi.name, new int[]{startBit, (int) (startBit + psize)});
+                    if (s.trackRanges) {
+                        s.lastFieldRanges.put(fi.name, new int[]{startBit, (int) (startBit + psize)});
+                    }
                     if (payloadStartBits < 0) {
                         payloadStartBits = startBit;
                     }
@@ -317,7 +328,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     value = readValue(fi, cursor, (int) size, ctx);
                 }
                 int endBit = cursor.bitOffset();
-                if (endBit > startBit) {
+                if (s.trackRanges && endBit > startBit) {
                     s.lastFieldRanges.put(fi.name, new int[]{startBit, endBit});
                 }
                 fi.field.set(obj, value);
@@ -333,7 +344,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 int consumedBytes = (consumedBits + 7) / 8;
                 if (length > consumedBytes) {
                     payloadField.field.set(obj, Arrays.copyOfRange(rawData, offset + consumedBytes, offset + length));
-                    s.lastFieldRanges.put(payloadField.name, new int[]{consumedBits, length * 8});
+                    if (s.trackRanges) {
+                        s.lastFieldRanges.put(payloadField.name, new int[]{consumedBits, length * 8});
+                    }
                 }
             }
             s.lastConsumedBits = cursor.bitOffset();
@@ -733,8 +746,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     /** LIST/TLV 元素级字节区间(字段↔字节联动的细粒度数据源,key 形如 "items[2]")。 */
     private void putElemRange(String field, int index, int fromBit, int toBit) {
-        if (toBit > fromBit) {
-            st().lastFieldRanges.put(field + "[" + index + "]", new int[]{fromBit, toBit});
+        DecodeState s = st();
+        if (s.trackRanges && toBit > fromBit) {
+            s.lastFieldRanges.put(field + "[" + index + "]", new int[]{fromBit, toBit});
         }
     }
 

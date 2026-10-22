@@ -143,7 +143,8 @@ public class CaptureEngine {
     }
 
     void accept(String iface, byte[] raw, long tsMillis) {
-        DecodedPacket packet = decoder.decode(raw, iface, tsMillis, captured.incrementAndGet());
+        // 采集热路径:关位区间簿记(详情由 detail() 按需重解码补全)
+        DecodedPacket packet = decoder.decode(raw, iface, tsMillis, captured.incrementAndGet(), false);
         FrameSummary summary = PacketSummarizer.summarize(packet);
         synchronized (ring) {
             ring.addLast(summary);

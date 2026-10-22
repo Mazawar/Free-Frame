@@ -73,6 +73,7 @@ public class EngineBench {
             benchDecode("iot-dev-cfg " + n + " entries", corpusOf(FrameKind.IOT_CFG, n));
         }
         benchDecode("mixed 4 business frames", mixedCorpus());
+        benchDecodeFull("detail-path same mixed", mixedCorpus());
 
         // ============ 编码 ============
         header("ENCODE");
@@ -214,6 +215,19 @@ public class EngineBench {
         runBench(name, bytes, corpus.length, () -> {
             long bh = 0;
             for (byte[] f : corpus) {
+                DecodedPacket p = decoder.decode(f, "bench", 0, 0, false);   // 采集快路径(无位区间)
+                bh += p.layers().size() + p.protocolPath().length();
+            }
+            return bh;
+        });
+    }
+
+    /** 详情路径(UI 选中帧按需重解码,含位区间簿记)。 */
+    static void benchDecodeFull(String name, byte[][] corpus) {
+        long bytes = corpus[0].length;
+        runBench(name, bytes, corpus.length, () -> {
+            long bh = 0;
+            for (byte[] f : corpus) {
                 DecodedPacket p = decoder.decode(f, "bench", 0, 0);
                 bh += p.layers().size() + p.protocolPath().length();
             }
@@ -303,7 +317,7 @@ public class EngineBench {
                 while (System.nanoTime() < deadline) {
                     try {
                         byte[] f = corpus[(int) ((ops + tid) % corpus.length)];
-                        DecodedPacket p = decoder.decode(f, "bench", 0, 0);
+                        DecodedPacket p = decoder.decode(f, "bench", 0, 0, false);
                         bh += p.layers().size() + p.protocolPath().length();
                         ops++;
                     } catch (Throwable e) {

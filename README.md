@@ -71,7 +71,7 @@ mvn install
 
 # 启动演示应用(三套业务协议 + 观测台),端口 8848
 mvn -pl netproto-demo spring-boot:run
-# 打开 http://localhost:8848
+# 打开 http://localhost:8848/netproto/
 ```
 
 ### 三分钟接入
@@ -145,6 +145,7 @@ core 不依赖 Spring —— 不用观测台也可以把它当纯编解码库嵌
 ```yaml
 netproto:
   enabled: true              # 总开关
+  ui-base-path: /netproto    # 观测台挂载路径(不占宿主应用根路径;"/" 会被拒绝)
   base-packages: []          # 用户协议扫描包;留空 = 自动探测 @SpringBootApplication 所在包
   builtin-packages:          # 内置栈扫描包(设 [] 可禁用)
     - com.netproto.protocols.builtin
@@ -156,7 +157,7 @@ netproto:
 
 ## 观测台与 REST / SSE API
 
-观测台(`http://localhost:8848`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
+观测台(`http://localhost:8848/netproto/`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
 按协议/多级分组过滤、分层发包面板(字段表单,长度/校验和/选择子自动)、pcap 导入导出。
 前端源码在 `netproto-web/ui`(Vite,`npm run dev` 热更新)。
 

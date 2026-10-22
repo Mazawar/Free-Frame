@@ -33,6 +33,9 @@ public class NetprotoProperties {
     /** 采集 snaplen。 */
     private int snaplen = 65536;
 
+    /** 观测台 UI 的挂载路径(starter 嵌入宿主工程时不占用根路径)。 */
+    private String uiBasePath = "/netproto";
+
     /** 并发采集会话上限(含 default 兼容会话)。每会话占一个 native 捕获句柄 + 两条线程,上限护资源。 */
     private int maxSessions = 4;
 
@@ -98,5 +101,33 @@ public class NetprotoProperties {
 
     public void setMaxSessions(int maxSessions) {
         this.maxSessions = maxSessions;
+    }
+
+    public String getUiBasePath() {
+        return uiBasePath;
+    }
+
+    public void setUiBasePath(String uiBasePath) {
+        this.uiBasePath = uiBasePath;
+    }
+
+    /**
+     * 规范化挂载路径:去空白、保证以 / 开头、去尾部 /。
+     * 根路径 "/" 被拒绝 —— 观测台占根路径会与宿主应用冲突,这正是本属性存在的原因。
+     */
+    public String normalizedUiBasePath() {
+        String p = uiBasePath == null ? "" : uiBasePath.trim();
+        if (p.isEmpty() || p.equals("/")) {
+            throw new IllegalStateException(
+                    "netproto.ui-base-path 必须是根下的子路径(如 /netproto),不能为空或 \"/\""
+                            + " —— 观测台不占宿主应用的根路径");
+        }
+        if (!p.startsWith("/")) {
+            p = "/" + p;
+        }
+        while (p.endsWith("/") && p.length() > 1) {
+            p = p.substring(0, p.length() - 1);
+        }
+        return p;
     }
 }

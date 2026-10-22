@@ -99,6 +99,8 @@ sequenceDiagram
 netproto:
   base-packages: []          # 用户协议扫描包;留空 = 自动探测
   root-protocol: ethernet    # 分派树根
+  ui-base-path: /netproto    # 观测台挂载路径(默认;"/" 被拒绝——不占宿主应用根路径,
+                             #   页面资源只经专属 handler 暴露,REST 恒为 /api/netproto/**)
   builtin-packages:          # 设 [] 禁用内置栈
     - com.netproto.protocols.builtin
 ```

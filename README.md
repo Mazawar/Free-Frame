@@ -259,7 +259,7 @@ netproto:
 ```
 
 `NetprotoAutoConfiguration` 扫描 `@Protocol` → 构建分派树 → 装配 `StackDecoder` /
-`StackEncoder` / `CaptureEngine` / `RawSender` / REST + SSE。重复 id、未知父、非法条件表达式
+`StackEncoder` / `SessionManager`(多会话采集)/ `RawSender` / REST + SSE。重复 id、未知父、非法条件表达式
 都会让应用**启动失败**——宁可起不来,也不要线上静默解析错。
 
 不用 Spring 时,core 是纯库:
@@ -337,14 +337,14 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-当前 **127 个测试**:
+当前 **133 个测试**:
 
 | 模块 | 数量 | 覆盖 |
 |---|---|---|
 | core | 117 | 引擎 + 栈 + 内置协议栈 + 特性试金石(含 pcap4j parity 对照:IPv4/IPv6/TCP) |
-| web | 10 | 自动装配扫描、pcap 读写、摘要格式化 |
+| web | 16 | 自动装配扫描、pcap 读写、多会话注册/隔离/回收、摘要格式化 |
 
-演示应用另有 33 个测试(三套协议并存分派 + 编码/解码演示 + 帧尾 CRC 边界 + REST 冒烟),
+演示应用另有 23 个测试(三套协议并存分派 + 编码/解码演示 + 帧尾 CRC 边界 + REST 冒烟),
 随 `redesign/protocol-stack` 分支维护。
 
 覆盖范围:位级 / 条件 / 变长 / LIST / TLV / sentinel / 校验和 / parity 对照、Expr 文法、
@@ -358,7 +358,8 @@ netproto-parent
 ├── netproto-core     注解 + 反射编解码引擎 + Expr 小语言 + 分派栈(Registry/Decoder/Encoder)
 │                     + 内置协议栈 com.netproto.protocols.builtin
 │                     零第三方依赖(仅 slf4j-api)—— 不依赖 Spring / pcap4j / Jackson
-└── netproto-web      Spring Boot starter:自动装配(扫描 @Protocol)+ CaptureEngine + RawSender
+└── netproto-web      Spring Boot starter:自动装配(扫描 @Protocol)+ SessionManager(多会话采集,页面 UUID 注册制)
+                      + RawSender
                       + REST/SSE + 内置观测页面(Vue 3 + Vite + naive-ui)
 ```
 

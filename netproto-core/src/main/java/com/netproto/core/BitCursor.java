@@ -26,55 +26,62 @@ public final class BitCursor {
         this.totalBits = byteCount * 8;
     }
 
-    /** 从当前位偏移读 size 位(大端),并推进游标。 */
+    /** 从当前位偏移读 size 位(大端),并推进游标。逐字节取块(而非逐位循环)。 */
     public long readBits(int size) {
         if (size < 0 || size > 64) {
             throw new IllegalArgumentException("size must be 0..64, got " + size);
         }
         long value = 0;
-        for (int i = 0; i < size; i++) {
-            int absBit = baseByte * 8 + bitPos + i;
-            int byteIdx = absBit / 8;
-            int bitInByte = 7 - (absBit % 8); // MSB 优先
-            value = (value << 1) | ((data[byteIdx] >> bitInByte) & 1);
+        int bits = size;
+        while (bits > 0) {
+            int absBit = baseByte * 8 + bitPos;
+            int byteIdx = absBit >>> 3;
+            int bitInByte = absBit & 7;
+            int take = Math.min(bits, 8 - bitInByte);   // 本字节内可取的位数
+            int chunk = ((data[byteIdx] & 0xFF) >>> (8 - bitInByte - take)) & ((1 << take) - 1);
+            value = (value << take) | chunk;
+            bitPos += take;
+            bits -= take;
         }
-        bitPos += size;
         return value;
     }
 
-    /** 从当前位偏移读 size 位为字节数组(BYTES/STRING/NESTED 用)。 */
+    /** 从当前位偏移读 size 位为字节数组(BYTES/STRING/NESTED 用)。对齐快路径走 arraycopy。 */
     public byte[] readBytes(int size) {
         if (size % 8 != 0) {
             throw new IllegalArgumentException("byte read needs a multiple of 8 bits, got " + size);
         }
         int n = size / 8;
         byte[] out = new byte[n];
-        for (int i = 0; i < n; i++) {
-            int absBit = baseByte * 8 + bitPos + i * 8;
-            int byteIdx = absBit / 8;
-            out[i] = data[byteIdx];
+        if (bitPos % 8 == 0) {
+            System.arraycopy(data, baseByte + bitPos / 8, out, 0, n);   // 常见对齐场景:内建拷贝
+        } else {
+            for (int i = 0; i < n; i++) {
+                int absBit = baseByte * 8 + bitPos + i * 8;
+                out[i] = data[absBit >>> 3];
+            }
         }
         bitPos += size;
         return out;
     }
 
-    /** 在当前位偏移写 value 的低 size 位(大端),并推进游标。 */
+    /** 在当前位偏移写 value 的低 size 位(大端),并推进游标。逐字节取块(而非逐位循环)。 */
     public void writeBits(long value, int size) {
         if (size < 0 || size > 64) {
             throw new IllegalArgumentException("size must be 0..64, got " + size);
         }
-        for (int i = size - 1; i >= 0; i--) {
-            int absBit = baseByte * 8 + bitPos + (size - 1 - i);
-            int byteIdx = absBit / 8;
-            int bitInByte = 7 - (absBit % 8);
-            long bit = (value >> i) & 1L;
-            if (bit == 1) {
-                data[byteIdx] |= (byte) (1 << bitInByte);
-            } else {
-                data[byteIdx] &= (byte) ~(1 << bitInByte);
-            }
+        int bits = size;
+        while (bits > 0) {
+            int absBit = baseByte * 8 + bitPos;
+            int byteIdx = absBit >>> 3;
+            int bitInByte = absBit & 7;
+            int take = Math.min(bits, 8 - bitInByte);
+            long chunk = (value >> (bits - take)) & ((1L << take) - 1);   // 取出待写的高 take 位
+            int shift = 8 - bitInByte - take;
+            data[byteIdx] = (byte) ((data[byteIdx] & ~(((1 << take) - 1) << shift)) | (chunk << shift));
+            bitPos += take;
+            bits -= take;
         }
-        bitPos += size;
     }
 
     /** 写入字节(BYTES/STRING/NESTED 用),size 必须是 8 的倍数。 */
@@ -91,11 +98,27 @@ public final class BitCursor {
         return bitPos;
     }
 
+    /** 当前游标的绝对字节偏移(游标须字节对齐)。零拷贝子层解码用。 */
+    public int byteOffset() {
+        requireByteAligned("byteOffset");
+        return baseByte + bitPos / 8;
+    }
+
+    /** 当前游标起的剩余字节数(游标须字节对齐)。零拷贝子层解码用。 */
+    public int remainingBytes() {
+        requireByteAligned("remainingBytes");
+        return data.length - (baseByte + bitPos / 8);
+    }
+
+    private void requireByteAligned(String op) {
+        if (bitPos % 8 != 0) {
+            throw new IllegalStateException(op + " requires byte-aligned cursor, bitPos=" + bitPos);
+        }
+    }
+
     /** 返回从当前游标位置(按字节对齐)起的剩余字节片段。游标必须字节对齐。 */
     public byte[] remainingFromCursor() {
-        if (bitPos % 8 != 0) {
-            throw new IllegalStateException("remainingFromCursor requires byte-aligned cursor, bitPos=" + bitPos);
-        }
+        requireByteAligned("remainingFromCursor");
         int bytePos = baseByte + bitPos / 8;
         return java.util.Arrays.copyOfRange(data, bytePos, data.length);
     }

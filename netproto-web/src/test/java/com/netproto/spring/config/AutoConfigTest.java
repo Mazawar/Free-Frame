@@ -1,8 +1,8 @@
 package com.netproto.spring.config;
 
 import com.netproto.protocols.builtin.UdpSegment;
-import com.netproto.spring.capture.CaptureEngine;
 import com.netproto.spring.capture.RawSender;
+import com.netproto.spring.capture.SessionManager;
 import com.netproto.stack.ProtocolRegistry;
 import com.netproto.stack.StackDecoder;
 import org.junit.jupiter.api.Test;
@@ -32,7 +32,7 @@ class AutoConfigTest {
                             List.of("ethernet", "arp", "ipv4", "icmp", "udp", "tcp")));
                     // 配套 bean 全部就位
                     assertEquals(1, ctx.getBeansOfType(StackDecoder.class).size());
-                    assertEquals(1, ctx.getBeansOfType(CaptureEngine.class).size());
+                    assertEquals(1, ctx.getBeansOfType(SessionManager.class).size());
                     assertEquals(1, ctx.getBeansOfType(RawSender.class).size());
                     // 绑定可用:udp 7777 → probe-a
                     UdpSegment udp = new UdpSegment();

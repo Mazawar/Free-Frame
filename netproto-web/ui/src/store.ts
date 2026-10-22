@@ -5,11 +5,18 @@ import { api } from './api'
 /** 前端缓冲上限兜底值;实际以后端 ring-size 为准(/config 拉取,见 bootstrap)。 */
 const DEFAULT_MAX_PACKETS = 100_000
 
+/** 本页会话身份的 sessionStorage 键:tab 间天然隔离,刷新不丢。 */
+const SESSION_KEY = 'netproto.sessionId'
+
 export const store = reactive({
   protocols: [] as ProtocolMeta[],
   interfaces: [] as Iface[],
   iface: '',
   bpf: '',
+  /** 本页会话身份(UUID):加载即生成,刷新/后端重启都不换;首次「采集」时在后端注册物化。 */
+  sessionId: '',
+  /** 后端是否已存在本会话(未注册/被回收/后端重启 = false,身份仍保留)。 */
+  sessionLive: false,
   captureRunning: false,
   captured: 0,
   enabled: new Set<string>(),
@@ -23,6 +30,16 @@ export const store = reactive({
   /** 后端运行配置(只读):显示参数以它为准 */
   config: { ringSize: DEFAULT_MAX_PACKETS, ringBytes: 0, snaplen: 0, rootProtocol: '' },
 })
+
+/** 页面身份就绪:sessionStorage 有就复用(刷新同身份),没有就生成 UUID。 */
+function ensureSessionIdentity() {
+  let id = sessionStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = crypto.randomUUID()
+    sessionStorage.setItem(SESSION_KEY, id)
+  }
+  store.sessionId = id
+}
 
 function maxPackets(): number {
   return store.config.ringSize > 0 ? store.config.ringSize : DEFAULT_MAX_PACKETS
@@ -55,6 +72,11 @@ function countPacket(p: PacketSummary, delta: number) {
 /** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用 */
 export function addPackets(batch: PacketSummary[]) {
   if (batch.length === 0) return
+  // seq 单调递增是会话内不变量;严格回退只可能是新会话(本页重启/后端重建)——先清旧帧防混排
+  if (store.captured > 0 && batch[0]!.seq < store.captured) {
+    store.packets = []
+    counts.clear()
+  }
   // 在普通副本上裁剪:避免对响应式数组 splice 逐索引触发(虚拟表格逐行订阅,量大时拖垮调度)
   const next = store.packets.concat(batch)
   const overflow = next.length - maxPackets()
@@ -67,6 +89,7 @@ export function addPackets(batch: PacketSummary[]) {
 }
 
 export function clearPackets() {
+  pending.length = 0   // 在途 SSE 事件一并丢弃:否则 150ms 合并窗口会把旧会话的帧补回刚清空的表格
   store.packets = []
   store.selected = null
   store.detail = null
@@ -85,7 +108,7 @@ export function closeDetail() {
 export async function selectPacket(seq: number) {
   store.selected = seq
   try {
-    const p = await api.packet(seq)
+    const p = await api.sessionPacket(store.sessionId, seq)
     if (store.selected === seq) store.detail = p   // 竞态守卫:期间换帧则丢弃
   } catch { /* 帧已被环形缓冲淘汰:保留旧详情 */ }
 }
@@ -116,20 +139,43 @@ function watchdog() {
   }
 }
 
+/** 断线后先确认会话还在再重连:会话没了(后端重启/被回收)就停在断开,下次采集注册时重连。 */
+async function reconnectIfAlive() {
+  if (!store.sessionLive) return
+  try {
+    await api.sessionStatus(store.sessionId)
+    setTimeout(connectStream, 2000)
+  } catch {
+    store.sessionLive = false
+    store.sse = 'closed'
+  }
+}
+
+/** 订阅本页会话的实时流;后端尚无本会话(未注册)则不连接。 */
 export function connectStream() {
   es?.close()
+  if (!store.sessionLive) {
+    store.sse = 'closed'
+    return
+  }
   store.sse = 'connecting'
   lastPing = Date.now()
   if (flushTimer === undefined) flushTimer = window.setInterval(flush, 150)
   if (watchdogTimer === undefined) watchdogTimer = window.setInterval(watchdog, 5000)
-  es = new EventSource('/api/netproto/stream')
+  es = new EventSource(`/api/netproto/sessions/${encodeURIComponent(store.sessionId)}/stream`)
   es.onopen = () => { store.sse = 'open'; lastPing = Date.now() }
   es.addEventListener('ping', () => { lastPing = Date.now() })
+  es.addEventListener('session-closed', () => {
+    // 会话被删除(清扫回收/后端重启):身份保留,下次采集重新注册
+    es?.close()
+    store.sse = 'closed'
+    store.sessionLive = false
+  })
   es.addEventListener('packet', ev => { pending.push(JSON.parse((ev as MessageEvent).data as string)) })
   es.onerror = () => {
     if (es && es.readyState === EventSource.CLOSED) {
       store.sse = 'closed'
-      setTimeout(connectStream, 2000)
+      void reconnectIfAlive()
     } else {
       store.sse = 'connecting'
     }
@@ -150,12 +196,42 @@ export async function refreshInterfaces() {
   }
 }
 
-export async function refreshStatus() {
+/** 采纳会话(注册成功后调用)。 */
+export function adoptSession(live: boolean) {
+  store.sessionLive = live
+}
+
+/** 页面加载:身份就绪 + 探测后端(会话在就接回并恢复状态;不在则等首次采集注册)。 */
+export async function restoreSession() {
+  ensureSessionIdentity()
   try {
-    const s = await api.status()
-    store.captureRunning = s.running === true
-    store.captured = Number(s.captured ?? 0)
-    const iface = s.iface as string
-    if (store.captureRunning && iface) store.iface = iface
-  } catch { /* 服务未起 */ }
+    applySessionStatus(await api.sessionStatus(store.sessionId))
+    store.sessionLive = true
+  } catch {
+    store.sessionLive = false
+    store.captureRunning = false
+  }
+}
+
+export async function refreshStatus() {
+  if (!store.sessionLive) {
+    store.captureRunning = false
+    return
+  }
+  try {
+    applySessionStatus(await api.sessionStatus(store.sessionId))
+  } catch (e) {
+    // 404 = 会话已被回收(后端重启/长时间无订阅被清扫):身份保留,下次采集重新注册
+    if ((e as { status?: number }).status === 404) {
+      store.sessionLive = false
+      store.captureRunning = false
+    }
+  }
+}
+
+function applySessionStatus(s: Record<string, unknown>) {
+  store.captureRunning = s.running === true
+  store.captured = Number(s.captured ?? 0)
+  const iface = s.iface as string
+  if (store.captureRunning && iface) store.iface = iface
 }

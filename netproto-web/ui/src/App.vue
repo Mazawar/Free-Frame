@@ -8,7 +8,7 @@ import DetailPane from './components/DetailPane.vue'
 import SendDialog from './components/SendDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { api } from './api'
-import { addPackets, connectStream, refreshInterfaces, refreshProtocols, refreshStatus, store } from './store'
+import { addPackets, connectStream, refreshInterfaces, refreshProtocols, restoreSession, store } from './store'
 
 // 克制的开发者工具配色:中性深底 + 单一强调色
 const themeOverrides: GlobalThemeOverrides = {
@@ -65,6 +65,14 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 onMounted(async () => {
+  // 本页会话身份(sessionStorage 隔离):已有则接回;后端还没有(首次/后端重启)→ 立即空闲注册占位
+  await restoreSession()
+  if (!store.sessionLive) {
+    try {
+      await api.sessionRegisterIdle(store.sessionId)
+      store.sessionLive = true
+    } catch { /* 超上限/服务未起:停留未注册,点「采集」时会再试 */ }
+  }
   connectStream()
   // 配置先行:缓冲上限等显示参数以它为准,恢复裁剪依赖 maxPackets
   try {
@@ -76,12 +84,14 @@ onMounted(async () => {
       rootProtocol: String(c.rootProtocol ?? ''),
     }
   } catch { /* 服务未起:用兜底默认 */ }
-  await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
-  // 恢复环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
+  await Promise.all([refreshProtocols(), refreshInterfaces()])
+  // 恢复本页会话环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
   try {
-    const recent = await api.packets(store.config.ringSize || 100_000)
-    addPackets(recent.reverse())
-  } catch { /* 服务未起 */ } finally {
+    if (store.sessionLive) {
+      const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000)
+      addPackets(recent.reverse())
+    }
+  } catch { /* 会话刚被回收:列表为空 */ } finally {
     store.bootstrapped = true
   }
 })

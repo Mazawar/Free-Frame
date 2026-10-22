@@ -21,6 +21,9 @@ public final class StackEncoder {
 
     private static final Logger log = LoggerFactory.getLogger(StackEncoder.class);
 
+    /** 每类「字段名 → 声明字段」缓存(autoWire 查选择子字段、findPayloadField 用)。 */
+    private static final Map<Class<?>, Map<String, Field>> DECLARED_FIELDS = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final ProtocolRegistry registry;
 
     public StackEncoder(ProtocolRegistry registry) {
@@ -54,7 +57,6 @@ public final class StackEncoder {
         Field payloadField = findPayloadField(layer.getClass());
         if (payloadField != null) {
             try {
-                payloadField.setAccessible(true);
                 payloadField.set(layer, innerBytes);
             } catch (IllegalAccessException e) {
                 throw new IllegalStateException(
@@ -84,13 +86,32 @@ public final class StackEncoder {
                 .codec();
     }
 
+    /** @Payload 字段缓存;无 @Payload 的类也缓存(Optional.empty 哨兵避免 CHM 空值)。 */
+    private static final Map<Class<?>, java.util.Optional<Field>> PAYLOAD_FIELDS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private static Field findPayloadField(Class<?> type) {
-        for (Field f : type.getDeclaredFields()) {
-            if (f.isAnnotationPresent(Payload.class)) {
-                return f;
+        return PAYLOAD_FIELDS.computeIfAbsent(type, t -> {
+            for (Field x : t.getDeclaredFields()) {
+                if (x.isAnnotationPresent(Payload.class)) {
+                    x.setAccessible(true);
+                    return java.util.Optional.of(x);
+                }
             }
-        }
-        return null;
+            return java.util.Optional.empty();
+        }).orElse(null);
+    }
+
+    /** 字段名 → 声明字段(缓存;一次扫描 + setAccessible)。 */
+    private static Field findNumberField(Class<?> type, String name) {
+        return DECLARED_FIELDS.computeIfAbsent(type, t -> {
+            Map<String, Field> m = new java.util.HashMap<>();
+            for (Field x : t.getDeclaredFields()) {
+                x.setAccessible(true);
+                m.put(x.getName(), x);
+            }
+            return m;
+        }).get(name);
     }
 
     /**
@@ -113,7 +134,6 @@ public final class StackEncoder {
                 continue;
             }
             try {
-                f.setAccessible(true);
                 long v = a.getValue();
                 Object current = f.get(layer);
                 if (current instanceof Number n && n.longValue() != 0) {
@@ -138,14 +158,5 @@ public final class StackEncoder {
                 throw new IllegalStateException("cannot auto-wire " + a.getKey(), e);
             }
         }
-    }
-
-    private static Field findNumberField(Class<?> type, String name) {
-        for (Field f : type.getDeclaredFields()) {
-            if (f.getName().equals(name)) {
-                return f;
-            }
-        }
-        return null;
     }
 }

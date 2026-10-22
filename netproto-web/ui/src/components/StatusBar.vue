@@ -21,18 +21,21 @@ const rate = computed(() => {
 })
 
 const sseText = computed(() =>
-  store.sse === 'open' ? '实时' : store.sse === 'connecting' ? '重连中' : '已断开')
+  !store.sessionId ? '无会话'
+  : store.sse === 'open' ? '实时'
+  : store.sse === 'connecting' ? '重连中' : '已断开')
 </script>
 
 <template>
   <footer class="bar">
+    <span class="num" :title="`本页专属会话(sessionStorage 隔离,多标签页互不可见):${store.sessionId || '尚未创建(点「采集」生成)'}`">会话 {{ store.sessionId || '—' }}</span>
     <span class="num" title="缓冲容量:后端 ring-size 配置(实际驻留还受 ring-bytes 字节预算约束)">缓冲 {{ store.config.ringSize }}</span>
     <span class="num" title="当前列表行数(过滤后)">显示 {{ filteredNewestFirst.length }}</span>
     <span v-if="rate" class="num">{{ rate }} 帧/秒</span>
     <span class="flex1"></span>
     <span v-if="store.captureRunning && ifaceLabel" class="dim">{{ ifaceLabel }}</span>
     <span v-else class="dim">未采集</span>
-    <span class="sse" :class="store.sse">
+    <span class="sse" :class="store.sessionId ? store.sse : 'none'">
       <span class="dot"></span>{{ sseText }}
     </span>
   </footer>
@@ -55,4 +58,5 @@ const sseText = computed(() =>
 .sse.open { color: #57ab5a; } .sse.open .dot { background: #57ab5a; }
 .sse.connecting { color: #c69026; } .sse.connecting .dot { background: #c69026; }
 .sse.closed { color: #e5534b; } .sse.closed .dot { background: #e5534b; }
+.sse.none { color: #6e7681; } .sse.none .dot { background: #6e7681; }
 </style>

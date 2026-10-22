@@ -5,11 +5,16 @@ import { api } from './api'
 /** 前端缓冲上限兜底值;实际以后端 ring-size 为准(/config 拉取,见 bootstrap)。 */
 const DEFAULT_MAX_PACKETS = 100_000
 
+/** 本页专属会话 id 的 sessionStorage 键:tab 间天然隔离,刷新页面不丢。 */
+const SESSION_KEY = 'netproto.sessionId'
+
 export const store = reactive({
   protocols: [] as ProtocolMeta[],
   interfaces: [] as Iface[],
   iface: '',
   bpf: '',
+  /** 本页专属采集会话(空 = 尚未创建):每个标签页一个会话,互相不可见。 */
+  sessionId: '',
   captureRunning: false,
   captured: 0,
   enabled: new Set<string>(),
@@ -23,6 +28,11 @@ export const store = reactive({
   /** 后端运行配置(只读):显示参数以它为准 */
   config: { ringSize: DEFAULT_MAX_PACKETS, ringBytes: 0, snaplen: 0, rootProtocol: '' },
 })
+
+function persistSession() {
+  if (store.sessionId) sessionStorage.setItem(SESSION_KEY, store.sessionId)
+  else sessionStorage.removeItem(SESSION_KEY)
+}
 
 function maxPackets(): number {
   return store.config.ringSize > 0 ? store.config.ringSize : DEFAULT_MAX_PACKETS
@@ -55,6 +65,11 @@ function countPacket(p: PacketSummary, delta: number) {
 /** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用 */
 export function addPackets(batch: PacketSummary[]) {
   if (batch.length === 0) return
+  // seq 单调递增是会话内不变量;严格回退只可能是新会话(本页重启/后端重建)——先清旧帧防混排
+  if (store.captured > 0 && batch[0]!.seq < store.captured) {
+    store.packets = []
+    counts.clear()
+  }
   // 在普通副本上裁剪:避免对响应式数组 splice 逐索引触发(虚拟表格逐行订阅,量大时拖垮调度)
   const next = store.packets.concat(batch)
   const overflow = next.length - maxPackets()
@@ -86,7 +101,7 @@ export function closeDetail() {
 export async function selectPacket(seq: number) {
   store.selected = seq
   try {
-    const p = await api.packet(seq)
+    const p = await api.sessionPacket(store.sessionId, seq)
     if (store.selected === seq) store.detail = p   // 竞态守卫:期间换帧则丢弃
   } catch { /* 帧已被环形缓冲淘汰:保留旧详情 */ }
 }
@@ -117,20 +132,47 @@ function watchdog() {
   }
 }
 
+/** 主动断流(重启会话前调用,避免吃到旧流的 session-closed 兜底)。 */
+export function disconnectStream() {
+  es?.close()
+  store.sse = 'closed'
+}
+
+/** 断线后先确认会话还在再重连:会话没了(后端重启/被删)就停在断开,不无限 404。 */
+async function reconnectIfAlive() {
+  if (!store.sessionId) return
+  try {
+    await api.sessionStatus(store.sessionId)
+    setTimeout(connectStream, 2000)
+  } catch {
+    store.sse = 'closed'   // 会话已不存在:refreshStatus 会回收为无会话态
+  }
+}
+
+/** 订阅本页会话的实时流;无会话则不连接(状态栏显示"无会话")。 */
 export function connectStream() {
   es?.close()
+  if (!store.sessionId) {
+    store.sse = 'closed'
+    return
+  }
   store.sse = 'connecting'
   lastPing = Date.now()
   if (flushTimer === undefined) flushTimer = window.setInterval(flush, 150)
   if (watchdogTimer === undefined) watchdogTimer = window.setInterval(watchdog, 5000)
-  es = new EventSource('/api/netproto/stream')
+  es = new EventSource(`/api/netproto/sessions/${encodeURIComponent(store.sessionId)}/stream`)
   es.onopen = () => { store.sse = 'open'; lastPing = Date.now() }
   es.addEventListener('ping', () => { lastPing = Date.now() })
+  es.addEventListener('session-closed', () => {
+    // 本页重启会话的路径已先 disconnectStream;到这里说明会话被外部删除
+    es?.close()
+    store.sse = 'closed'
+  })
   es.addEventListener('packet', ev => { pending.push(JSON.parse((ev as MessageEvent).data as string)) })
   es.onerror = () => {
     if (es && es.readyState === EventSource.CLOSED) {
       store.sse = 'closed'
-      setTimeout(connectStream, 2000)
+      void reconnectIfAlive()
     } else {
       store.sse = 'connecting'
     }
@@ -151,12 +193,49 @@ export async function refreshInterfaces() {
   }
 }
 
-export async function refreshStatus() {
+/** 采纳会话(创建/切换后调用):记住 id(sessionStorage,刷新页面可恢复)。 */
+export function adoptSession(id: string) {
+  store.sessionId = id
+  persistSession()
+}
+
+/** 页面加载恢复:sessionStorage 里的会话还在后端就接回(含停止未删:数据可继续看)。 */
+export async function restoreSession(): Promise<boolean> {
+  const id = sessionStorage.getItem(SESSION_KEY)
+  if (!id) return false
+  store.sessionId = id
   try {
-    const s = await api.status()
-    store.captureRunning = s.running === true
-    store.captured = Number(s.captured ?? 0)
-    const iface = s.iface as string
-    if (store.captureRunning && iface) store.iface = iface
-  } catch { /* 服务未起 */ }
+    await applySessionStatus(await api.sessionStatus(id))
+    return true
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) {
+      store.sessionId = ''
+      persistSession()
+    }
+    return false
+  }
+}
+
+export async function refreshStatus() {
+  if (!store.sessionId) {
+    store.captureRunning = false
+    return
+  }
+  try {
+    applySessionStatus(await api.sessionStatus(store.sessionId))
+  } catch (e) {
+    // 404 = 会话已不存在(后端重启/被删):回收为无会话态;其余(服务未起)保留现状
+    if ((e as { status?: number }).status === 404) {
+      store.sessionId = ''
+      persistSession()
+      store.captureRunning = false
+    }
+  }
+}
+
+function applySessionStatus(s: Record<string, unknown>) {
+  store.captureRunning = s.running === true
+  store.captured = Number(s.captured ?? 0)
+  const iface = s.iface as string
+  if (store.captureRunning && iface) store.iface = iface
 }

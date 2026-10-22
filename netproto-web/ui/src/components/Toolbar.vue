@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { NButton, NInput, NSelect, NTooltip, useMessage } from 'naive-ui'
 import { Download, Play, SendHorizontal, Square, Trash2, Upload } from 'lucide-vue-next'
 import { api } from '../api'
-import { clearPackets, refreshStatus, store } from '../store'
+import { adoptSession, clearPackets, connectStream, disconnectStream, refreshStatus, store } from '../store'
 
 const message = useMessage()
 const switching = ref(false)
@@ -13,25 +13,36 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const ifaceOptions = computed(() =>
   store.interfaces.map(i => ({ label: (i.description || i.name).slice(0, 64), value: i.name })))
 
+/** 采集 = 本页新会话:释放旧会话(腾名额)→ 创建并启动 → 订阅它的流。序号从 1 重新计数。 */
 async function start() {
   if (!store.iface) return
   switching.value = true
   try {
-    await api.start(store.iface, store.bpf)
-    // 后端 start 即新会话:环形缓冲已清、序号从 1 重新计数;前端同步清空,避免新旧会话序号撞车
+    if (store.sessionId) {
+      // 先断流再删:正常路径不吃 session-closed 兜底;删失败(已不在)不阻塞新会话
+      disconnectStream()
+      try { await api.sessionDelete(store.sessionId) } catch { /* 会话已不存在 */ }
+      adoptSession('')
+    }
+    const s = await api.sessionCreate(store.iface, store.bpf)
+    adoptSession(String(s.sessionId))
     clearPackets()
     await refreshStatus()
+    connectStream()
   } catch (e) {
     message.error(`启动失败:${(e as Error).message}`, { keepAliveOnHover: true, duration: 5000 })
+    await refreshStatus()
   } finally {
     switching.value = false
   }
 }
 
+/** 停止 = 本页会话停止采集;会话与缓冲保留(数据继续可看,刷新页面可恢复)。 */
 async function stop() {
+  if (!store.sessionId) return
   switching.value = true
   try {
-    await api.stop()
+    await api.sessionStop(store.sessionId)
     await refreshStatus()
   } catch (e) {
     message.error((e as Error).message)
@@ -40,20 +51,21 @@ async function stop() {
   }
 }
 
-/** 导出环形缓冲:Content-Disposition 触发浏览器下载 .pcap(Wireshark 可直接打开)。 */
+/** 导出本页会话的环形缓冲:Content-Disposition 触发浏览器下载 .pcap(Wireshark 可直接打开)。 */
 function exportPcap() {
-  window.location.href = '/api/netproto/export'
+  if (!store.sessionId) return
+  window.location.href = api.sessionExportUrl(store.sessionId)
 }
 
-/** 导入 pcap:替换当前列表(后端清环形缓冲,前端同步清空);SSE 会在批次里送回全部帧。 */
+/** 导入 pcap:替换本页会话列表(要求会话已停止;无会话时按钮禁用)。SSE 会把全部帧送回。 */
 async function onImportFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''   // 允许再次选择同一文件
-  if (!file) return
+  if (!file || !store.sessionId) return
   importing.value = true
   try {
-    const r = await api.importPcap(file)
+    const r = await api.sessionImport(store.sessionId, file)
     clearPackets()
     message.success(`已导入 ${r.imported} 帧(替换当前列表)`)
   } catch (err) {
@@ -125,11 +137,12 @@ async function onImportFile(e: Event) {
         </n-tooltip>
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button size="small" quaternary :loading="importing" @click="fileInput?.click()">
+            <n-button size="small" quaternary :loading="importing"
+                      :disabled="!store.sessionId || store.captureRunning" @click="fileInput?.click()">
               <template #icon><Upload :size="13" /></template>
             </n-button>
           </template>
-          导入 .pcap(替换当前列表)
+          导入 .pcap(替换当前列表;需本页已有会话且已停止)
         </n-tooltip>
         <input ref="fileInput" type="file" accept=".pcap" hidden @change="onImportFile" />
         <n-tooltip trigger="hover">

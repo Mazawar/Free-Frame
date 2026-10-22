@@ -586,6 +586,7 @@ public class NetprotoController {
         });
         session.addListener(listener);
         session.addCloseCallback(closeCallback);
+        queue.offer(KEEPALIVE);   // 立即一个 ping:提前落响应头,空闲会话的浏览器 onopen 不用等 15s 首个周期
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
         emitter.onError(x -> cleanup.run());

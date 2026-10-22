@@ -5,6 +5,7 @@ import com.netproto.spring.capture.SessionManager;
 import com.netproto.stack.StackEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
@@ -26,9 +27,18 @@ public class DemoSampleController {
         this.samples = new PowerDistSamples(encoder);
     }
 
-    /** 注入配电协议交互样例(注册 → 许可 → 上报 → 参数响应),返回各帧长度。 */
+    /** 注入配电协议交互样例(注册 → 许可 → 上报 → 参数响应),返回各帧长度。
+     *  可选 ?session=sN 注入到指定会话(页面会话化后默认会话页面看不到);缺省仍进 default。 */
     @PostMapping("/samples")
-    public Map<String, Object> injectSamples() {
+    public Map<String, Object> injectSamples(
+            @RequestParam(required = false) String session) {
+        com.netproto.spring.capture.CaptureSession target = sessions.defaultSession();
+        if (session != null && !session.isBlank()) {
+            target = sessions.get(session);
+            if (target == null) {
+                throw new IllegalArgumentException("unknown session: " + session);
+            }
+        }
         byte[][] frames = {
                 samples.register(),
                 samples.registerGrant(),
@@ -41,7 +51,7 @@ public class DemoSampleController {
         sizes.put("pd-status-report", frames[2].length);
         sizes.put("pd-param-query-resp", frames[3].length);
         for (byte[] f : frames) {
-            sessions.defaultSession().inject("demo", f);
+            target.inject("demo", f);
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "injected");

@@ -8,7 +8,7 @@ import DetailPane from './components/DetailPane.vue'
 import SendDialog from './components/SendDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { api } from './api'
-import { addPackets, connectStream, refreshInterfaces, refreshProtocols, refreshStatus, store } from './store'
+import { addPackets, connectStream, refreshInterfaces, refreshProtocols, restoreSession, store } from './store'
 
 // 克制的开发者工具配色:中性深底 + 单一强调色
 const themeOverrides: GlobalThemeOverrides = {
@@ -65,7 +65,9 @@ const themeOverrides: GlobalThemeOverrides = {
 }
 
 onMounted(async () => {
-  connectStream()
+  // 本页专属会话恢复(sessionStorage 隔离):上次未删的会话接回,数据与流都只属于本页
+  await restoreSession()
+  connectStream()   // 无会话时内部直接置 closed(状态栏显示"无会话")
   // 配置先行:缓冲上限等显示参数以它为准,恢复裁剪依赖 maxPackets
   try {
     const c = await api.config()
@@ -76,12 +78,14 @@ onMounted(async () => {
       rootProtocol: String(c.rootProtocol ?? ''),
     }
   } catch { /* 服务未起:用兜底默认 */ }
-  await Promise.all([refreshProtocols(), refreshInterfaces(), refreshStatus()])
-  // 恢复环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
+  await Promise.all([refreshProtocols(), refreshInterfaces()])
+  // 恢复本页会话环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
   try {
-    const recent = await api.packets(store.config.ringSize || 100_000)
-    addPackets(recent.reverse())
-  } catch { /* 服务未起 */ } finally {
+    if (store.sessionId) {
+      const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000)
+      addPackets(recent.reverse())
+    }
+  } catch { /* 会话刚被回收:列表为空 */ } finally {
     store.bootstrapped = true
   }
 })

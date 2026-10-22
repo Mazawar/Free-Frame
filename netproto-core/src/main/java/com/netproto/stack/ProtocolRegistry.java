@@ -25,11 +25,18 @@ public final class ProtocolRegistry {
     /** 注册项:id/name/builtin/实体类型/编解码器。 */
     public record Entry(String id, String name, boolean builtin, Class<?> type, PacketCodec<?> codec) {}
 
-    /** 一条分派绑定(parent 的某个子协议命中规则)。 */
-    private record Binding(String childId, Expr.Node when, String rawWhen, int priority) {}
+    /** 一条分派绑定(parent 的某个子协议命中规则)。assignments 为构造期解析的「字段=常量」表。 */
+    private record Binding(String childId, Expr.Node when, String rawWhen, int priority,
+                           Map<String, Long> assignments) {
+        Binding(String childId, Expr.Node when, String rawWhen, int priority) {
+            this(childId, when, rawWhen, priority, Expr.assignments(rawWhen));
+        }
+    }
 
     private final Map<String, Entry> byId = new LinkedHashMap<>();
     private final Map<String, List<Binding>> children = new LinkedHashMap<>();
+    /** 类型 → 注册项(此前 byType 每次线性扫注册表,编码热路径逐层调用)。 */
+    private final Map<Class<?>, Entry> byType = new LinkedHashMap<>();
 
     public static ProtocolRegistry create(Class<?>... classes) {
         return create(Arrays.asList(classes));
@@ -62,8 +69,10 @@ public final class ProtocolRegistry {
             codec = new ProtocolCodec<>(clazz);
         }
         validateFieldGroups(ann.id(), clazz);
-        byId.put(ann.id(), new Entry(ann.id(),
-                ann.name().isEmpty() ? ann.id() : ann.name(), ann.builtin(), clazz, codec));
+        Entry entry = new Entry(ann.id(),
+                ann.name().isEmpty() ? ann.id() : ann.name(), ann.builtin(), clazz, codec);
+        byId.put(ann.id(), entry);
+        byType.put(clazz, entry);
     }
 
     /**
@@ -160,18 +169,17 @@ public final class ProtocolRegistry {
         return null;
     }
 
-    /** 供 StackEncoder 选择子自动接线:parent→child 绑定的 when 提取「字段=常量」赋值。 */
+    /** 供 StackEncoder 选择子自动接线:parent→child 绑定的「字段=常量」赋值(构造期已解析缓存)。 */
     public Map<String, Long> autoWireAssignments(String parentId, String childId) {
         List<Binding> bs = children.get(parentId);
         if (bs != null) {
             for (Binding b : bs) {
                 if (b.childId.equals(childId)) {
-                    Map<String, Long> out = Expr.assignments(b.rawWhen);
-                    if (out.isEmpty() && !b.rawWhen.isBlank()) {
+                    if (b.assignments().isEmpty() && !b.rawWhen.isBlank()) {
                         log.warn("binding {}->{} when '{}' is not auto-wirable (needs manual selector fields)",
                                 parentId, childId, b.rawWhen);
                     }
-                    return out;
+                    return b.assignments();
                 }
             }
         }
@@ -182,9 +190,9 @@ public final class ProtocolRegistry {
         return byId.get(id);
     }
 
-    /** 按实体类型反查注册项(StackEncoder 用)。 */
+    /** 按实体类型反查注册项(StackEncoder 用;O(1) 查表)。 */
     public Optional<Entry> byType(Class<?> type) {
-        return byId.values().stream().filter(e -> e.type == type).findFirst();
+        return Optional.ofNullable(byType.get(type));
     }
 
     public Collection<Entry> all() {
@@ -223,20 +231,32 @@ public final class ProtocolRegistry {
         return names;
     }
 
+    /** 每类实体的注解字段缓存(matchChild 每帧每层求值用;此前每次全量 getDeclaredFields+setAccessible)。 */
+    private static final Map<Class<?>, List<java.lang.reflect.Field>> CTX_FIELDS = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 已解析对象的字段视图(matchChild 求值用)。 */
     static FieldContext contextOf(Object obj) {
         FieldContext ctx = FieldContext.create(obj);
-        for (java.lang.reflect.Field f : obj.getClass().getDeclaredFields()) {
-            if (f.isAnnotationPresent(ProtocolField.class) || f.isAnnotationPresent(Payload.class)) {
-                f.setAccessible(true);
-                try {
-                    ctx.put(f.getName(), f.get(obj));
-                } catch (IllegalAccessException e) {
-                    throw new IllegalStateException("cannot read field " + f.getName(), e);
-                }
+        for (java.lang.reflect.Field f : CTX_FIELDS.computeIfAbsent(
+                obj.getClass(), ProtocolRegistry::annotatedFields)) {
+            try {
+                ctx.put(f.getName(), f.get(obj));
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException("cannot read field " + f.getName(), e);
             }
         }
         return ctx;
+    }
+
+    private static List<java.lang.reflect.Field> annotatedFields(Class<?> type) {
+        List<java.lang.reflect.Field> out = new ArrayList<>();
+        for (java.lang.reflect.Field f : type.getDeclaredFields()) {
+            if (f.isAnnotationPresent(ProtocolField.class) || f.isAnnotationPresent(Payload.class)) {
+                f.setAccessible(true);
+                out.add(f);
+            }
+        }
+        return out;
     }
 
     private static long resolveLenient(FieldContext ctx, String name) {

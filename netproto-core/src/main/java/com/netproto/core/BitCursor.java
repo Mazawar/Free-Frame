@@ -91,11 +91,27 @@ public final class BitCursor {
         return bitPos;
     }
 
+    /** 当前游标的绝对字节偏移(游标须字节对齐)。零拷贝子层解码用。 */
+    public int byteOffset() {
+        requireByteAligned("byteOffset");
+        return baseByte + bitPos / 8;
+    }
+
+    /** 当前游标起的剩余字节数(游标须字节对齐)。零拷贝子层解码用。 */
+    public int remainingBytes() {
+        requireByteAligned("remainingBytes");
+        return data.length - (baseByte + bitPos / 8);
+    }
+
+    private void requireByteAligned(String op) {
+        if (bitPos % 8 != 0) {
+            throw new IllegalStateException(op + " requires byte-aligned cursor, bitPos=" + bitPos);
+        }
+    }
+
     /** 返回从当前游标位置(按字节对齐)起的剩余字节片段。游标必须字节对齐。 */
     public byte[] remainingFromCursor() {
-        if (bitPos % 8 != 0) {
-            throw new IllegalStateException("remainingFromCursor requires byte-aligned cursor, bitPos=" + bitPos);
-        }
+        requireByteAligned("remainingFromCursor");
         int bytePos = baseByte + bitPos / 8;
         return java.util.Arrays.copyOfRange(data, bytePos, data.length);
     }

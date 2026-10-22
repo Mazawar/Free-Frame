@@ -12,12 +12,32 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     private final List<FieldInfo> fixedFields; // 按 order 排序
     private final FieldInfo payloadField;      // @Payload 字段(向后兼容)
 
-    /** 最近一次 deserialize 的头部(固定字段)位宽;headerBytes() 用。分派线程内单线程使用。 */
-    private int lastHeaderBits;
-    /** 最近一次 deserialize 各顶层字段的位区间(相对本层起点);lastFieldRanges() 用。 */
-    private final java.util.Map<String, int[]> lastFieldRanges = new HashMap<>();
-    /** 当前 deserialize 的层边界(相对游标 baseByte 的位偏移),untilEnd 循环用。 */
-    private int layerEndBits;
+    /**
+     * 每线程解码状态(codec 是注册表单例,被所有解码线程共享):
+     * 原为实例字段,并发解码会在共享 HashMap 上产生 ConcurrentModificationException,
+     * 且堆叠写同一缓存行互相拖慢 —— ThreadLocal 隔离后并发解码安全。
+     */
+    private final ThreadLocal<DecodeState> state = ThreadLocal.withInitial(DecodeState::new);
+
+    private static final class DecodeState {
+        /** 最近一次 deserialize 的头部(固定字段)位宽;headerBytes() 用。 */
+        int lastHeaderBits;
+        /** 最近一次 deserialize 各顶层字段的位区间(相对本层起点);lastFieldRanges() 用。 */
+        final Map<String, int[]> lastFieldRanges = new HashMap<>();
+        /** 当前 deserialize 的层边界(相对游标 baseByte 的位偏移),untilEnd 循环用。 */
+        int layerEndBits;
+        /** 最近一次 deserialize 实际消耗的位数(LIST 元素步进用,替代反向序列化测长)。 */
+        int lastConsumedBits;
+    }
+
+    private DecodeState st() {
+        return state.get();
+    }
+
+    /** 构造期解析一次(此前每次 deserialize 都 getDeclaredConstructor + setAccessible)。 */
+    private final java.lang.reflect.Constructor<T> ctor;
+    /** 字段名 → FieldInfo(fieldOf 查找从线性扫描降为 O(1))。 */
+    private final Map<String, FieldInfo> fieldsByName = new HashMap<>();
 
     public ProtocolCodec(Class<T> clazz) {
         this.clazz = clazz;
@@ -53,6 +73,28 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         validateReferences(fixed);
         this.fixedFields = fixed;
         this.payloadField = payload;
+
+        // 反射一次性就绪:字段/计数字段 setAccessible 一次、名→FieldInfo 索引、无参构造器缓存。
+        // Field 对象不可变且为 codec 私有,构造期放开后全程免重复 setAccessible(此前每字段每帧都调)。
+        for (FieldInfo fi : fixed) {
+            fi.field.setAccessible(true);
+            fieldsByName.put(fi.name, fi);
+            if (!fi.countField.isEmpty()) {
+                fi.countFieldRef = findFieldByName(clazz, fi.countField);
+                if (fi.countFieldRef != null) {
+                    fi.countFieldRef.setAccessible(true);
+                }
+            }
+        }
+        if (payload != null && payload.order < 0) {
+            payload.field.setAccessible(true);   // 裸 @Payload 不在 fixed 列表
+        }
+        try {
+            this.ctor = clazz.getDeclaredConstructor();
+        } catch (NoSuchMethodException e) {
+            throw new IllegalArgumentException(clazz.getName() + " needs a no-arg constructor", e);
+        }
+        this.ctor.setAccessible(true);   // 支持包私有协议类
     }
 
     /** 注册期校验:lengthField 引用的字段必须存在,且 order 必须更小(禁止前向引用)。 */
@@ -230,16 +272,14 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         return deserialize(rawData, 0, rawData.length);
     }
 
-    @SuppressWarnings("unchecked")
     public T deserialize(byte[] rawData, int offset, int length) {
         try {
-            java.lang.reflect.Constructor<T> ctor = clazz.getDeclaredConstructor();
-            ctor.setAccessible(true);   // 支持包私有协议类
             T obj = ctor.newInstance();
+            DecodeState s = st();
             FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
             BitCursor cursor = new BitCursor(rawData, offset);
-            this.layerEndBits = length * 8;
-            this.lastFieldRanges.clear();
+            s.layerEndBits = length * 8;
+            s.lastFieldRanges.clear();
             int payloadStartBits = -1;   // 长度驱动 @Payload 的起始位(分派入口)
 
             for (FieldInfo fi : fixedFields) {
@@ -256,9 +296,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                 + "': lengthField resolves to non-whole-byte size " + psize);
                     }
                     byte[] pval = cursor.readBytes((int) psize);   // readBytes 收位(BYTES 语义)
-                    fi.field.setAccessible(true);
                     fi.field.set(obj, pval);
-                    this.lastFieldRanges.put(fi.name, new int[]{startBit, (int) (startBit + psize)});
+                    s.lastFieldRanges.put(fi.name, new int[]{startBit, (int) (startBit + psize)});
                     if (payloadStartBits < 0) {
                         payloadStartBits = startBit;
                     }
@@ -279,26 +318,25 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 }
                 int endBit = cursor.bitOffset();
                 if (endBit > startBit) {
-                    this.lastFieldRanges.put(fi.name, new int[]{startBit, endBit});
+                    s.lastFieldRanges.put(fi.name, new int[]{startBit, endBit});
                 }
-                fi.field.setAccessible(true);
                 fi.field.set(obj, value);
                 ctx.put(fi.name, value);
             }
             // 长度驱动 @Payload:分派入口 = body 起点(尾随字段不影响);
             // 裸 @Payload/无 payload:入口 = 声明字段结束处(与旧语义一致)
-            this.lastHeaderBits = payloadStartBits >= 0 ? payloadStartBits : cursor.bitOffset();
+            s.lastHeaderBits = payloadStartBits >= 0 ? payloadStartBits : cursor.bitOffset();
 
             // 向后兼容:裸 @Payload 取剩余字节(长度驱动模式已在循环内读毕)
             if (payloadField != null && payloadField.order < 0) {
                 int consumedBits = cursor.bitOffset();
                 int consumedBytes = (consumedBits + 7) / 8;
                 if (length > consumedBytes) {
-                    payloadField.field.setAccessible(true);
                     payloadField.field.set(obj, Arrays.copyOfRange(rawData, offset + consumedBytes, offset + length));
-                    this.lastFieldRanges.put(payloadField.name, new int[]{consumedBits, length * 8});
+                    s.lastFieldRanges.put(payloadField.name, new int[]{consumedBits, length * 8});
                 }
             }
+            s.lastConsumedBits = cursor.bitOffset();
             return obj;
         } catch (Exception e) {
             throw new RuntimeException("Failed to deserialize " + clazz.getName(), e);
@@ -310,14 +348,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             FieldContext.Impl ctx = (FieldContext.Impl) FieldContext.create(obj);
             // 先把所有字段值装入 ctx(序列化时 ctx 一次性完整)
             for (FieldInfo fi : fixedFields) {
-                fi.field.setAccessible(true);
                 ctx.put(fi.name, fi.field.get(obj));
             }
 
             // payload 内容先取(长度驱动模式在循环内按 order 位置写入;裸 @Payload 循环后追加)
             byte[] payloadData = null;
             if (payloadField != null) {
-                payloadField.field.setAccessible(true);
                 payloadData = (byte[]) payloadField.field.get(obj);
             }
 
@@ -335,16 +371,15 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     if (impliedBits < 0 || impliedBits / 8 != actualBytes) {
                         throw new IllegalStateException(
                                 "payload field '" + fi.name + "': lengthField '" + fi.lengthField
-                                        + "'=" + numberFieldValue(fieldOf(fi.lengthField), obj)
-                                        + " implies " + (impliedBits < 0 ? "?" : impliedBits / 8)
-                                        + " body bytes but payload has " + actualBytes
-                                        + " — set the length field (PayloadAware.onPayload or manual)");
+                                + "'=" + numberFieldValue(fieldOf(fi.lengthField), obj)
+                                + " implies " + (impliedBits < 0 ? "?" : impliedBits / 8)
+                                + " body bytes but payload has " + actualBytes
+                                + " — set the length field (PayloadAware.onPayload or manual)");
                     }
                     totalBits += actualBytes * 8;
                     continue;
                 }
                 if (fi.custom != null) {
-                    fi.field.setAccessible(true);
                     totalBits += fi.custom.sizeOf(fi.field.get(obj));
                     continue;
                 }
@@ -370,7 +405,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     continue;
                 }
                 if (fi.custom != null) {
-                    fi.field.setAccessible(true);
                     fi.custom.write(cursor, ctx, fi.field.get(obj));
                     continue;
                 }
@@ -511,7 +545,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 //       只能作为帧中最后一个字段,Phase 1 限制)。remainingBits 为负(无剩余字节)说明该
                 //       字段并非最后一个 → 抛出,避免静默截断/破坏后续字段。
                 if (!deserialize) {
-                    fi.field.setAccessible(true);
                     Object nestedValue = fi.field.get(obj);
                     if (nestedValue == null) {
                         throw new IllegalStateException(
@@ -540,7 +573,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     /** 计算 LIST 字段总位数(供 resolveSize 用;主要服务序列化端两遍循环)。 */
     private long listTotalBits(FieldInfo fi, Object obj) throws Exception {
-        fi.field.setAccessible(true);
         @SuppressWarnings("unchecked")
         java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
         if (list == null) {
@@ -549,7 +581,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         // count 驱动且计数字段未设置(0):按列表长度自动回填(ELEMENTS=个数/BYTES=字节)。
         // 在第一遍(算总位数)完成,早于任何字段写入。BYTES 需要元素定长,ELEMENTS 不需要。
         if (!fi.countField.isEmpty() && !fi.untilEnd) {
-            java.lang.reflect.Field cf = findFieldByName(obj.getClass(), fi.countField);
+            java.lang.reflect.Field cf = countFieldOf(fi, obj);
             if (cf != null && numberFieldValue(cf, obj) == 0) {
                 long v;
                 if (fi.countUnit == com.netproto.annotation.CountUnit.BYTES) {
@@ -557,7 +589,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 } else {
                     v = list.size();
                 }
-                cf.setAccessible(true);
                 if (cf.getType() == int.class || cf.getType() == Integer.class) {
                     cf.set(obj, (int) v);
                 } else if (cf.getType() == long.class || cf.getType() == Long.class) {
@@ -582,7 +613,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     /** 计算 LIST_TLV 字段总位数(供 resolveSize 序列化用)。 */
     private long tlvTotalBits(FieldInfo fi, Object obj) throws Exception {
-        fi.field.setAccessible(true);
         @SuppressWarnings("unchecked")
         java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
         long total = 0;
@@ -602,7 +632,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
      * - LIST:数据 = 各元素 serialize 累加
      */
     private long sentinelTotalBits(FieldInfo fi, Object obj) throws Exception {
-        fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
         long dataBits;
         if (value == null) {
@@ -678,12 +707,16 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     /** 读数值字段为 long(非数值/不可读返回 0)。 */
     /** 按字段名找声明字段(一致性检查用;找不到返回 null → numberFieldValue 得 0)。 */
     private Field fieldOf(String name) {
-        for (FieldInfo fi : fixedFields) {
-            if (fi.name.equals(name)) {
-                return fi.field;
-            }
+        FieldInfo fi = fieldsByName.get(name);
+        return fi == null ? null : fi.field;
+    }
+
+    /** 计数字段引用:构造期解析一次缓存到 FieldInfo;防御性兼容子类实例(未命中再查)。 */
+    private static java.lang.reflect.Field countFieldOf(FieldInfo fi, Object obj) {
+        if (fi.countFieldRef != null && fi.countFieldRef.getDeclaringClass() == obj.getClass()) {
+            return fi.countFieldRef;
         }
-        return null;
+        return findFieldByName(obj.getClass(), fi.countField);
     }
 
     private static long numberFieldValue(java.lang.reflect.Field f, Object obj) {
@@ -691,7 +724,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             return 0;
         }
         try {
-            f.setAccessible(true);
             Object v = f.get(obj);
             return v instanceof Number n ? n.longValue() : 0;
         } catch (IllegalAccessException e) {
@@ -702,7 +734,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     /** LIST/TLV 元素级字节区间(字段↔字节联动的细粒度数据源,key 形如 "items[2]")。 */
     private void putElemRange(String field, int index, int fromBit, int toBit) {
         if (toBit > fromBit) {
-            this.lastFieldRanges.put(field + "[" + index + "]", new int[]{fromBit, toBit});
+            st().lastFieldRanges.put(field + "[" + index + "]", new int[]{fromBit, toBit});
         }
     }
 
@@ -769,26 +801,24 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                             break;
                         }
                         int before = cursor.bitOffset();
-                        byte[] rest = cursor.remainingFromCursor();
-                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
                         list.add(elem);
-                        cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                        cursor.skipBits(elementCodec.lastConsumedBits());
                         putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
                     }
                 } else if (fi.untilEnd) {
                     // 耗尽驱动:读到本层缓冲区末尾为止(元素须自定边界,注册期已校验)
-                    while (cursor.bitOffset() < layerEndBits) {
+                    while (cursor.bitOffset() < st().layerEndBits) {
                         int before = cursor.bitOffset();
-                        byte[] rest = cursor.remainingFromCursor();
-                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
                         list.add(elem);
-                        int elemBits = (int) (serializeNested(elementCodec, elem).length * 8L);
+                        int elemBits = elementCodec.lastConsumedBits();
                         if (elemBits == 0) {
                             break;  // 防 0 字节元素死循环
                         }
                         cursor.skipBits(elemBits);
                         putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
-                        if (before + elemBits > layerEndBits) {
+                        if (before + elemBits > st().layerEndBits) {
                             // 元素越过层边界(数据畸形):保留已读元素,停止循环
                             break;
                         }
@@ -802,10 +832,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     }
                     for (int i = 0; i < count; i++) {
                         int before = cursor.bitOffset();
-                        byte[] rest = cursor.remainingFromCursor();
-                        Object elem = elementCodec.deserialize(rest, 0, rest.length);
+                        Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
                         list.add(elem);
-                        cursor.skipBits((int) (serializeNested(elementCodec, elem).length * 8L));
+                        cursor.skipBits(elementCodec.lastConsumedBits());
                         putElemRange(fi.name, i, before, cursor.bitOffset());
                     }
                 }
@@ -913,7 +942,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             return;
         }
         FieldType type = effectiveType(fi);
-        fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
         switch (type) {
             case INT, UNSIGNED -> {
@@ -960,7 +988,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     // declared<0 = null 数组语义(如 Kafka topicsCount=-1):跳过校验,写空列表
                     if (!fi.countField.isEmpty()) {
                         boolean byBytes = fi.countUnit == com.netproto.annotation.CountUnit.BYTES;
-                        java.lang.reflect.Field cf = findFieldByName(obj.getClass(), fi.countField);
+                        java.lang.reflect.Field cf = countFieldOf(fi, obj);
                         long declared = numberFieldValue(cf, obj);
                         if (declared >= 0) {
                             long expected = byBytes
@@ -984,7 +1012,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     /** sentinel 序列化:写数据 + 追加标记字节。 */
     private void writeSentinelValue(FieldInfo fi, Object obj, BitCursor cursor) throws Exception {
-        fi.field.setAccessible(true);
         Object value = fi.field.get(obj);
         if (value == null) {
             // 空数据:仅写标记字节
@@ -1010,7 +1037,6 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     /** LIST_TLV 序列化:每个元素 type+length+value,末尾追加 sentinel。 */
     @SuppressWarnings("unchecked")
     private void writeTlvValue(FieldInfo fi, Object obj, BitCursor cursor) throws Exception {
-        fi.field.setAccessible(true);
         java.util.List<Object> list = (java.util.List<Object>) fi.field.get(obj);
         for (Object elem : list) {
             Integer type = fi.reverseDispatchMap.get(elem.getClass().getSimpleName());
@@ -1198,6 +1224,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         final boolean untilEnd;
         final FieldCodec<Object> custom;
         final Expr.Node presentIfNode;
+        /** 计数字段的反射引用(构造期解析一次并 setAccessible;序列化端 countFieldOf 用)。 */
+        java.lang.reflect.Field countFieldRef;
 
         /** 是否启用终结标记(单字节 sentinel 或多字节 sentinelStr)。 */
         boolean hasSentinel() {
@@ -1359,11 +1387,16 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
 
     @Override
     public int headerBytes() {
-        return (lastHeaderBits + 7) / 8;
+        return (st().lastHeaderBits + 7) / 8;
+    }
+
+    /** 最近一次 deserialize 实际消耗的位数(LIST 元素步进用;同线程读回)。 */
+    public int lastConsumedBits() {
+        return st().lastConsumedBits;
     }
 
     @Override
     public java.util.Map<String, int[]> lastFieldRanges() {
-        return java.util.Collections.unmodifiableMap(lastFieldRanges);
+        return java.util.Collections.unmodifiableMap(st().lastFieldRanges);
     }
 }

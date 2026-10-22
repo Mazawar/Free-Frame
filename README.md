@@ -56,14 +56,14 @@ class MyProtocol { /* 字段 */ }
 
 ## 快速开始
 
-**要求**:JDK 25、Maven(仓库自带 `mvnw`);Windows 上采集/发包需安装 [Npcap](https://npcap.com/) 并以管理员身份运行。
+**要求**:JDK 25、Maven 3.9+;Windows 上采集/发包需安装 [Npcap](https://npcap.com/) 并以管理员身份运行。
 
 ```bash
 # 构建全部模块(含测试)
-./mvnw install
+mvn install
 
 # 启动演示应用(内置三套业务协议 + 观测台),端口 8848
-./mvnw -pl netproto-demo spring-boot:run
+mvn -pl netproto-demo spring-boot:run
 # 打开 http://localhost:8848
 ```
 
@@ -344,7 +344,7 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ## 测试
 
 ```bash
-./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
+mvn test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
 当前 **152 个测试**:

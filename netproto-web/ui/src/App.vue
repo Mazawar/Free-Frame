@@ -81,7 +81,7 @@ onMounted(async () => {
   await Promise.all([refreshProtocols(), refreshInterfaces()])
   // 恢复本页会话环形缓冲里的最近帧(服务端按环容量截断,这里给足上限;单批一次进 store)
   try {
-    if (store.sessionId) {
+    if (store.sessionLive) {
       const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000)
       addPackets(recent.reverse())
     }

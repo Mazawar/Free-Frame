@@ -5,7 +5,7 @@ import { api } from './api'
 /** 前端缓冲上限兜底值;实际以后端 ring-size 为准(/config 拉取,见 bootstrap)。 */
 const DEFAULT_MAX_PACKETS = 100_000
 
-/** 本页专属会话 id 的 sessionStorage 键:tab 间天然隔离,刷新页面不丢。 */
+/** 本页会话身份的 sessionStorage 键:tab 间天然隔离,刷新不丢。 */
 const SESSION_KEY = 'netproto.sessionId'
 
 export const store = reactive({
@@ -13,8 +13,10 @@ export const store = reactive({
   interfaces: [] as Iface[],
   iface: '',
   bpf: '',
-  /** 本页专属采集会话(空 = 尚未创建):每个标签页一个会话,互相不可见。 */
+  /** 本页会话身份(UUID):加载即生成,刷新/后端重启都不换;首次「采集」时在后端注册物化。 */
   sessionId: '',
+  /** 后端是否已存在本会话(未注册/被回收/后端重启 = false,身份仍保留)。 */
+  sessionLive: false,
   captureRunning: false,
   captured: 0,
   enabled: new Set<string>(),
@@ -29,9 +31,14 @@ export const store = reactive({
   config: { ringSize: DEFAULT_MAX_PACKETS, ringBytes: 0, snaplen: 0, rootProtocol: '' },
 })
 
-function persistSession() {
-  if (store.sessionId) sessionStorage.setItem(SESSION_KEY, store.sessionId)
-  else sessionStorage.removeItem(SESSION_KEY)
+/** 页面身份就绪:sessionStorage 有就复用(刷新同身份),没有就生成 UUID。 */
+function ensureSessionIdentity() {
+  let id = sessionStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = crypto.randomUUID()
+    sessionStorage.setItem(SESSION_KEY, id)
+  }
+  store.sessionId = id
 }
 
 function maxPackets(): number {
@@ -132,21 +139,22 @@ function watchdog() {
   }
 }
 
-/** 断线后先确认会话还在再重连:会话没了(后端重启/被删)就停在断开,不无限 404。 */
+/** 断线后先确认会话还在再重连:会话没了(后端重启/被回收)就停在断开,下次采集注册时重连。 */
 async function reconnectIfAlive() {
-  if (!store.sessionId) return
+  if (!store.sessionLive) return
   try {
     await api.sessionStatus(store.sessionId)
     setTimeout(connectStream, 2000)
   } catch {
-    store.sse = 'closed'   // 会话已不存在:refreshStatus 会回收为无会话态
+    store.sessionLive = false
+    store.sse = 'closed'
   }
 }
 
-/** 订阅本页会话的实时流;无会话则不连接(状态栏显示"无会话")。 */
+/** 订阅本页会话的实时流;后端尚无本会话(未注册)则不连接。 */
 export function connectStream() {
   es?.close()
-  if (!store.sessionId) {
+  if (!store.sessionLive) {
     store.sse = 'closed'
     return
   }
@@ -158,9 +166,10 @@ export function connectStream() {
   es.onopen = () => { store.sse = 'open'; lastPing = Date.now() }
   es.addEventListener('ping', () => { lastPing = Date.now() })
   es.addEventListener('session-closed', () => {
-    // 本页重启会话的路径已先 disconnectStream;到这里说明会话被外部删除
+    // 会话被删除(清扫回收/后端重启):身份保留,下次采集重新注册
     es?.close()
     store.sse = 'closed'
+    store.sessionLive = false
   })
   es.addEventListener('packet', ev => { pending.push(JSON.parse((ev as MessageEvent).data as string)) })
   es.onerror = () => {
@@ -187,41 +196,34 @@ export async function refreshInterfaces() {
   }
 }
 
-/** 采纳会话(创建/切换后调用):记住 id(sessionStorage,刷新页面可恢复)。 */
-export function adoptSession(id: string) {
-  store.sessionId = id
-  persistSession()
+/** 采纳会话(注册成功后调用)。 */
+export function adoptSession(live: boolean) {
+  store.sessionLive = live
 }
 
-/** 页面加载恢复:sessionStorage 里的会话还在后端就接回(含停止未删:数据可继续看)。 */
-export async function restoreSession(): Promise<boolean> {
-  const id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) return false
-  store.sessionId = id
+/** 页面加载:身份就绪 + 探测后端(会话在就接回并恢复状态;不在则等首次采集注册)。 */
+export async function restoreSession() {
+  ensureSessionIdentity()
   try {
-    await applySessionStatus(await api.sessionStatus(id))
-    return true
-  } catch (e) {
-    if ((e as { status?: number }).status === 404) {
-      store.sessionId = ''
-      persistSession()
-    }
-    return false
+    applySessionStatus(await api.sessionStatus(store.sessionId))
+    store.sessionLive = true
+  } catch {
+    store.sessionLive = false
+    store.captureRunning = false
   }
 }
 
 export async function refreshStatus() {
-  if (!store.sessionId) {
+  if (!store.sessionLive) {
     store.captureRunning = false
     return
   }
   try {
     applySessionStatus(await api.sessionStatus(store.sessionId))
   } catch (e) {
-    // 404 = 会话已不存在(后端重启/被删):回收为无会话态;其余(服务未起)保留现状
+    // 404 = 会话已被回收(后端重启/长时间无订阅被清扫):身份保留,下次采集重新注册
     if ((e as { status?: number }).status === 404) {
-      store.sessionId = ''
-      persistSession()
+      store.sessionLive = false
       store.captureRunning = false
     }
   }

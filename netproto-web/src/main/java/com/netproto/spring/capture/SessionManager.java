@@ -108,6 +108,35 @@ public class SessionManager {
         return s;
     }
 
+    /**
+     * 注册页面自带的会话 id(UUID):不存在则创建并启动,存在且已停止则重启——
+     * 后端重启/会话被回收后页面凭同一 id 重新注册,身份永不换。
+     * id 格式 [A-Za-z0-9_-]{4,64};default 保留;超上限拒绝。
+     */
+    public synchronized CaptureSession register(String id, String iface, String bpf)
+            throws PcapNativeException, NotOpenException {
+        if (id == null || !id.matches("[A-Za-z0-9_-]{4,64}")) {
+            throw new IllegalArgumentException(
+                    "invalid session id (4-64 chars of A-Za-z0-9_-): " + id);
+        }
+        if (DEFAULT_ID.equals(id)) {
+            throw new IllegalArgumentException("session id '" + DEFAULT_ID + "' is reserved");
+        }
+        CaptureSession existing = sessions.get(id);
+        if (existing != null) {
+            existing.start(iface, bpf);   // 已在运行由控制器预检转 409
+            return existing;
+        }
+        if (!canCreate()) {
+            throw new IllegalStateException("session limit reached: " + maxSessions
+                    + " concurrent sessions max — delete one first");
+        }
+        CaptureSession s = newSession(id);
+        s.start(iface, bpf);
+        sessions.put(id, s);
+        return s;
+    }
+
     /** 是否还有名额(default 未创建时为其预留一个位置,保证旧端点随时可用)。 */
     public boolean canCreate() {
         int count = sessions.size() + (sessions.containsKey(DEFAULT_ID) ? 0 : 1);

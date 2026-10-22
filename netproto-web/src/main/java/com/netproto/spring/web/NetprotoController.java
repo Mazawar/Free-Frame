@@ -395,10 +395,21 @@ public class NetprotoController {
         return out;
     }
 
-    /** 创建并启动新会话 {iface, bpf?} → {sessionId, ...status}(页面首次「采集」)。 */
+    /** 创建/注册并启动会话 {iface, bpf?, id?}:带 id(页面生成的 UUID)= 注册语义
+     *  (不存在创建、已停止重启、已在运行 409);不带 id = 后端自动命名(s1、s2…)。 */
     @PostMapping("/sessions")
     public Map<String, Object> createSession(@RequestBody Map<String, String> body) throws Exception {
         String iface = requiredIface(body);
+        String id = body.get("id");
+        if (id != null && !id.isBlank()) {
+            id = id.trim();
+            CaptureSession existing = sessions.get(id);
+            if (existing != null && existing.isRunning()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "session '" + id + "' already running on " + existing.iface() + " — stop it first");
+            }
+            return sessions.register(id, iface, body.get("bpf")).status();
+        }
         if (!sessions.canCreate()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "session limit reached (" + sessions.maxSessions()

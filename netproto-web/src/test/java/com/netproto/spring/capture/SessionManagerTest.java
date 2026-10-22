@@ -135,6 +135,36 @@ class SessionManagerTest {
     }
 
     @Test
+    void registerWithClientGeneratedId() throws Exception {
+        StackDecoder decoder = newDecoder();
+        var starts = new int[1];
+        SessionManager mgr = new SessionManager(decoder, 100, 64 * 1024, 65536, 4) {
+            @Override
+            protected CaptureSession newSession(String id) {
+                // 测试桩:不碰真实网卡,数启动次数
+                return new CaptureSession(id, decoder, 100, 64 * 1024, 65536) {
+                    @Override
+                    public void start(String iface, String bpf) {
+                        starts[0]++;
+                    }
+                };
+            }
+        };
+        // 页面生成的 UUID 形态 id:注册即以该 id 创建
+        String id = "3f2a1b8e-9c2d-4a17-8f6b-2c31d5e7a9b4";
+        CaptureSession s = mgr.register(id, "lo", "");
+        assertEquals(id, s.id());
+        assertEquals(1, starts[0]);
+        // 后端重启/回收后凭同一 id 再注册 = 同一会话对象重启(身份永不换)
+        assertSame(s, mgr.register(id, "lo", ""));
+        assertEquals(2, starts[0]);
+        // 保留字与非法 id 拒绝(→400)
+        assertThrows(IllegalArgumentException.class, () -> mgr.register("default", "lo", ""));
+        assertThrows(IllegalArgumentException.class, () -> mgr.register("bad id!", "lo", ""));
+        assertThrows(IllegalArgumentException.class, () -> mgr.register("ab", "lo", ""));
+    }
+
+    @Test
     void idleSessionsWithoutViewersAreReaped() throws Exception {
         StackDecoder decoder = newDecoder();
         // grace=200ms:手动调 sweepIdleSessions 验证回收规则(定时器也会跑,不影响断言)

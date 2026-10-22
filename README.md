@@ -10,7 +10,7 @@
 
 **只解析被 `@Protocol` 标记的协议,其余流量保持原始字节。**
 
-[快速开始](#快速开始) · [核心概念](#核心概念) · [注解语言](#注解语言) · [观测台](#观测台) · [REST / SSE API](#rest--sse-api) · [诚实边界](#诚实边界)
+[快速开始](#快速开始) · [核心概念](#核心概念) · [注解语言](#注解语言) · [协议栈](docs/protocol-stack.md) · [逃生舱](docs/escape-hatch.md) · [观测台](#观测台) · [REST / SSE API](#rest--sse-api) · [诚实边界](#诚实边界)
 
 </div>
 
@@ -53,6 +53,14 @@ class MyProtocol { /* 字段 */ }
 - **Spring Boot 自动装配** —— 扫描 `@Protocol` 即注册,入口类零代码;配置失败启动即 fail-fast
 - **内置观测台** —— 实时帧表格(10 万行虚拟滚动)、层级字段树、hex/ASCII 双视图选区、分层发包面板、pcap 导入导出
 - **core 零第三方依赖** —— 仅 `slf4j-api`;不依赖 Spring / pcap4j / Jackson
+
+## 文档
+
+- [注解语言参考](docs/annotation-reference.md) —— `@Protocol` / `@BindOn` / `@ProtocolField` 全属性、四种循环驱动、表达式小语言、注册期校验规则
+- [协议栈:分派与组装](docs/protocol-stack.md) —— 自顶向下解码、StackEncoder 自动接线(选择子/长度/校验和)、注册表与 Spring 装配、模块布局
+- [逃生舱 L1/L2/L3](docs/escape-hatch.md) —— 声明式之外的怪格式怎么接:FieldCodec 字段级、PacketCodec 报文级、内置 VarintCodec 与真实协议用例
+- [如何测试你的协议](docs/testing-your-protocol.md) —— 权威向量法、校验和三方自证、边界测试清单、常见坑
+- [帧格式能力边界报告](docs/format-boundary-report.md) —— 59 协议调研 × 机制矩阵 × 18 个真实协议实测(72% 纯声明式)
 
 ## 快速开始
 

@@ -13,7 +13,7 @@
 ![JDK](https://img.shields.io/badge/JDK-25-blue)
 ![Maven](https://img.shields.io/badge/Maven-3.9%2B-blue)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green)
-![Tests](https://img.shields.io/badge/tests-232%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-260%20passing-brightgreen)
 
 </div>
 
@@ -236,7 +236,7 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ## 已验证的真实协议
 
 18 个协议族 / 46 个字节级用例(权威向量 + round-trip),见
-`netproto-core/src/test/java/com/netproto/protocols/real/`:
+`redesign/protocol-stack` 分支 `netproto-core/src/test/java/com/netproto/protocols/real/`:
 
 - **电力/工控**:Modbus RTU(CRC-16 标准向量)、Modbus TCP、DL/T 645(+0x33 混淆)、IEC 60870-5-101/104、HART
 - **车载**:SOME/IP、ISO-TP(nibble 12bit 长度)
@@ -246,9 +246,8 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 
 ## 测试
 
-```bash
-mvn test        # 232 个测试(core 216 / web 16)
-```
+本分支只含源码与文档;**260 个测试**(core 216 / web 21 / demo 23)与演示应用位于
+`redesign/protocol-stack` 分支,在该分支执行 `mvn test`。
 
 测试方法论(权威向量、校验和三方自证、畸形输入兜底)见
 [testing-your-protocol.md](docs/testing-your-protocol.md)。

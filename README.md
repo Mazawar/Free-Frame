@@ -125,8 +125,7 @@ DecodedPacket p = decoder.decode(frame, "udp", 0, 1);
 MyProtocol msg = (MyProtocol) p.layers().get(3).packet();
 ```
 
-端到端示例见 `netproto-demo` 的 `PowerDistProtocolTest`(编码逐字节期望、手拼 hex 解码、
-往返无损、整栈分派、计数驱动变长列表五个用例)。
+端到端字节级示例见 `netproto-core` 的 `protocols/real/`(18 个真实协议族,权威向量)。
 
 ## 文档
 

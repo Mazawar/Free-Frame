@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { NButton, NInput, NSelect, NTooltip, useMessage } from 'naive-ui'
 import { Download, Play, SendHorizontal, Square, Trash2, Upload } from 'lucide-vue-next'
 import { api } from '../api'
-import { adoptSession, clearPackets, connectStream, disconnectStream, refreshStatus, store } from '../store'
+import { adoptSession, clearPackets, connectStream, refreshStatus, store } from '../store'
 
 const message = useMessage()
 const switching = ref(false)
@@ -13,22 +13,29 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const ifaceOptions = computed(() =>
   store.interfaces.map(i => ({ label: (i.description || i.name).slice(0, 64), value: i.name })))
 
-/** 采集 = 本页新会话:释放旧会话(腾名额)→ 创建并启动 → 订阅它的流。序号从 1 重新计数。 */
+/** 采集 = 本页会话启动/重启:页面即一个稳定会话,启停只是会话内操作(序号从 1 重新计数)。
+ *  无会话(首次/被回收)→ 创建;会话已被回收(404)→ 降级创建新的。 */
 async function start() {
   if (!store.iface) return
   switching.value = true
   try {
-    if (store.sessionId) {
-      // 先断流再删:正常路径不吃 session-closed 兜底;删失败(已不在)不阻塞新会话
-      disconnectStream()
-      try { await api.sessionDelete(store.sessionId) } catch { /* 会话已不存在 */ }
-      adoptSession('')
+    if (!store.sessionId) {
+      const s = await api.sessionCreate(store.iface, store.bpf)
+      adoptSession(String(s.sessionId))
+      connectStream()
+    } else {
+      try {
+        await api.sessionRestart(store.sessionId, store.iface, store.bpf)
+      } catch (e) {
+        if ((e as { status?: number }).status !== 404) throw e
+        // 会话已被空闲回收/后端重启:降级为创建新会话
+        const s = await api.sessionCreate(store.iface, store.bpf)
+        adoptSession(String(s.sessionId))
+        connectStream()
+      }
     }
-    const s = await api.sessionCreate(store.iface, store.bpf)
-    adoptSession(String(s.sessionId))
     clearPackets()
     await refreshStatus()
-    connectStream()
   } catch (e) {
     message.error(`启动失败:${(e as Error).message}`, { keepAliveOnHover: true, duration: 5000 })
     await refreshStatus()

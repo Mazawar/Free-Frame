@@ -18,9 +18,16 @@ export const api = {
 
   // ---- 会话化采集(每页专属会话;旧 /capture、/packets 端点不再由页面使用) ----
 
-  /** 创建并启动新会话,返回 {sessionId, running, iface, ...}。 */
+  /** 创建并启动新会话,返回 {sessionId, running, iface, ...}(页面首次「采集」)。 */
   sessionCreate: (iface: string, bpf: string) =>
     fetch('/api/netproto/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iface, bpf }),
+    }).then(r => json<Record<string, unknown>>(r)),
+  /** 重启本页已有会话(同一 id,缓冲清空、序号从 1;404=会话已被回收,调用方降级为创建)。 */
+  sessionRestart: (id: string, iface: string, bpf: string) =>
+    fetch(`/api/netproto/sessions/${id}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ iface, bpf }),

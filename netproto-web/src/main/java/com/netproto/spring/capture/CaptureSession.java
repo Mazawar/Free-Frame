@@ -64,6 +64,9 @@ public class CaptureSession {
     private final List<Runnable> closeCallbacks = new CopyOnWriteArrayList<>();
 
     private final ArrayBlockingQueue<Frame> pending = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    /** 订阅者(SSE 连接)计数:页面专属会话凭它判定"页面还开着吗"。 */
+    private final AtomicInteger viewers = new AtomicInteger();
+    private volatile long noViewerSince = System.currentTimeMillis();
     private volatile PcapHandle handle;
     private volatile Thread captureThread;
     private volatile Thread decodeThread;
@@ -316,10 +319,21 @@ public class CaptureSession {
 
     public void addListener(Consumer<FrameSummary> listener) {
         listeners.add(listener);
+        if (viewers.incrementAndGet() == 1) {
+            noViewerSince = 0L;   // 有人订阅:不参与空闲回收
+        }
     }
 
     public void removeListener(Consumer<FrameSummary> listener) {
-        listeners.remove(listener);
+        if (listeners.remove(listener) && viewers.decrementAndGet() == 0) {
+            noViewerSince = System.currentTimeMillis();   // 无订阅者的起点(页面刷新的断连空窗也由此计时)
+        }
+    }
+
+    /** 已连续无订阅者(SSE 连接)的时长 ms;仍有订阅者返回 0。页面专属会话的生死即以此映射。 */
+    public long millisWithoutViewers() {
+        long since = noViewerSince;
+        return since == 0L ? 0L : System.currentTimeMillis() - since;
     }
 
     public void addCloseCallback(Runnable callback) {

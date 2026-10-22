@@ -395,7 +395,7 @@ public class NetprotoController {
         return out;
     }
 
-    /** 创建并启动新会话 {iface, bpf?} → {sessionId, ...status}。 */
+    /** 创建并启动新会话 {iface, bpf?} → {sessionId, ...status}(页面首次「采集」)。 */
     @PostMapping("/sessions")
     public Map<String, Object> createSession(@RequestBody Map<String, String> body) throws Exception {
         String iface = requiredIface(body);
@@ -405,6 +405,21 @@ public class NetprotoController {
                             + ") — delete one first: DELETE /api/netproto/sessions/{id}");
         }
         return sessions.create(iface, body.get("bpf")).status();
+    }
+
+    /** 重启已有会话(页面稳定会话模型:同一页面反复「采集」复用同一会话,
+     *  启停是会话内操作;缓冲清空、序号从 1 重新计数)。 */
+    @PostMapping("/sessions/{id}/start")
+    public Map<String, Object> startSession(@PathVariable String id,
+                                            @RequestBody Map<String, String> body) throws Exception {
+        String iface = requiredIface(body);
+        CaptureSession s = sessionOr404(id);
+        if (s.isRunning()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "session '" + id + "' already running on " + s.iface() + " — stop it first");
+        }
+        s.start(iface, body.get("bpf"));
+        return s.status();
     }
 
     @GetMapping("/sessions/{id}/status")

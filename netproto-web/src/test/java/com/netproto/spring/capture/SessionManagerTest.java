@@ -107,4 +107,61 @@ class SessionManagerTest {
         assertNotSame(def1, def2);
         assertEquals("default", def2.id());
     }
+
+    @Test
+    void restartReusesSameSession() throws Exception {
+        StackDecoder decoder = newDecoder();
+        var starts = new int[1];
+        SessionManager mgr = new SessionManager(decoder, 100, 64 * 1024, 65536, 4) {
+            @Override
+            protected CaptureSession newSession(String id) {
+                // 测试桩:不碰真实网卡,数启动次数
+                return new CaptureSession(id, decoder, 100, 64 * 1024, 65536) {
+                    @Override
+                    public void start(String iface, String bpf) {
+                        starts[0]++;
+                    }
+                };
+            }
+        };
+        CaptureSession created = mgr.create("lo", "");
+        assertEquals("s1", created.id());
+        assertEquals(1, starts[0]);
+        // 重启 = 同一会话对象再次 start(页面稳定会话:启停是会话内操作,id 不变)
+        CaptureSession restarted = mgr.restart("s1", "eth0", "arp");
+        assertSame(created, restarted);
+        assertEquals(2, starts[0]);
+        assertNull(mgr.restart("nope", "lo", ""));
+    }
+
+    @Test
+    void idleSessionsWithoutViewersAreReaped() throws Exception {
+        StackDecoder decoder = newDecoder();
+        // grace=200ms:手动调 sweepIdleSessions 验证回收规则(定时器也会跑,不影响断言)
+        SessionManager mgr = new SessionManager(decoder, 100, 64 * 1024, 65536, 4, 200) {
+            @Override
+            protected CaptureSession newSession(String id) {
+                // 测试桩:start 不碰真实网卡
+                return new CaptureSession(id, decoder, 100, 64 * 1024, 65536) {
+                    @Override
+                    public void start(String iface, String bpf) {
+                        // no-op
+                    }
+                };
+            }
+        };
+        CaptureSession orphan = mgr.create("lo", "");            // 无订阅者:页面已关
+        CaptureSession watched = mgr.create("lo", "");
+        var sink = new java.util.ArrayList<FrameSummary>();
+        watched.addListener(sink::add);                          // 有订阅者:页面开着
+        Thread.sleep(300);
+        mgr.sweepIdleSessions();
+        assertNull(mgr.get(orphan.id()), "无订阅者超宽限:应被回收");
+        assertNotNull(mgr.get(watched.id()), "有订阅者:不回收");
+        // default 豁免:curl 等传统用法常无订阅者
+        mgr.defaultSession();
+        Thread.sleep(300);
+        mgr.sweepIdleSessions();
+        assertNotNull(mgr.get(SessionManager.DEFAULT_ID), "default 不参与空闲回收");
+    }
 }

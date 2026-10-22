@@ -132,12 +132,6 @@ function watchdog() {
   }
 }
 
-/** 主动断流(重启会话前调用,避免吃到旧流的 session-closed 兜底)。 */
-export function disconnectStream() {
-  es?.close()
-  store.sse = 'closed'
-}
-
 /** 断线后先确认会话还在再重连:会话没了(后端重启/被删)就停在断开,不无限 404。 */
 async function reconnectIfAlive() {
   if (!store.sessionId) return

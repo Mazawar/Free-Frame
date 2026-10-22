@@ -29,6 +29,11 @@ public final class Expr {
         long value(String name);
     }
 
+    /** 字段名 → 声明位宽的解析函数(位索引用);未知/动态长度返回 -1。 */
+    public interface WidthResolver {
+        int width(String name);
+    }
+
     /** 宽松模式下未知/未解析标识符的内部信号。 */
     public static final class UnknownIdentifier extends RuntimeException {
         public final String name;
@@ -81,11 +86,13 @@ public final class Expr {
 
     /** 递归收集 AST 中的全部标识符(注册期校验 when 引用的字段存在)。 */
     /**
-     * 解析位索引标识符 "name[n]":按 lookup 取字段值,返回从最高有效位起第 n 位(0/1)。
-     * 位宽按 Java 装箱类型(Integer=32/Long=64/Short=16/Byte=8,其余 Number 按 64)。
+     * 解析位索引标识符 "name[n]":按 lookup 取字段值,返回从字段最高有效位起第 n 位(0/1)。
+     * 位宽优先取字段声明位宽(widthLookup 返回 >0 时,即注解 size);
+     * 未声明(动态长度,-1)时回退 Java 装箱类型宽度(Integer=32/Long=64/Short=16/Byte=8)。
      * name 不是位索引语法时返回 null;字段不存在抛 UnknownIdentifier,非数值抛异常。
      */
-    public static Long resolveBitIndex(java.util.function.Function<String, Object> lookup, String ident) {
+    public static Long resolveBitIndex(java.util.function.Function<String, Object> lookup,
+                                       WidthResolver widthLookup, String ident) {
         int lb = ident.indexOf('[');
         if (lb < 0 || !ident.endsWith("]") || ident.indexOf(']', lb) != ident.length() - 1) {
             return null;
@@ -103,23 +110,24 @@ public final class Expr {
         }
         long raw;
         int width;
-        if (v instanceof Long l) {
-            raw = l;
-            width = 64;
-        } else if (v instanceof Integer i) {
-            raw = i;
-            width = 32;
-        } else if (v instanceof Short h) {
-            raw = h;
-            width = 16;
-        } else if (v instanceof Byte b) {
-            raw = b;
-            width = 8;
-        } else if (v instanceof java.lang.Number n) {
+        if (v instanceof Number n) {
             raw = n.longValue();
-            width = 64;
+            int declared = widthLookup.width(base);
+            if (declared > 0) {
+                width = declared;
+            } else if (v instanceof Long) {
+                width = 64;
+            } else if (v instanceof Integer) {
+                width = 32;
+            } else if (v instanceof Short) {
+                width = 16;
+            } else if (v instanceof Byte) {
+                width = 8;
+            } else {
+                width = 64;
+            }
         } else {
-            throw new UnknownIdentifier(base + " (non-numeric)");
+            throw new IllegalArgumentException(base + " (non-numeric)");
         }
         if (bit < 1 || bit > width) {
             throw new IllegalArgumentException(ident + ": bit index out of range (1-" + width + ")");

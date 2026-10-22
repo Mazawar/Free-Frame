@@ -123,14 +123,23 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                     + "' which is not earlier in order (forward ref forbidden)");
                 }
             }
-            // presentIf 校验(只查字段存在;位索引语法 name[n] 查基名)
-            if (!fi.presentIf.isBlank()) {
-                int eq = fi.presentIf.indexOf("==");
-                String left = eq >= 0 ? fi.presentIf.substring(0, eq).trim() : fi.presentIf.trim();
-                String base = left.contains("[") ? left.substring(0, left.indexOf('[')) : left;
-                if (!nameToOrder.containsKey(base)) {
-                    throw new IllegalArgumentException(
-                            "field '" + fi.name + "' presentIf references unknown field '" + base + "'");
+            // presentIf 校验:走 Expr 全语法(编译由 FieldInfo 完成),收集全部标识符
+            // (位索引 name[n] 取基名),逐个校验存在且 order 更早(禁止前向引用)。
+            if (fi.presentIfNode != null) {
+                java.util.Set<String> idents = new java.util.HashSet<>();
+                Expr.collectIdents(fi.presentIfNode, idents);
+                for (String id : idents) {
+                    String base = id.contains("[") ? id.substring(0, id.indexOf('[')) : id;
+                    Integer refOrder = nameToOrder.get(base);
+                    if (refOrder == null) {
+                        throw new IllegalArgumentException(
+                                "field '" + fi.name + "' presentIf references unknown field '" + base + "'");
+                    }
+                    if (refOrder >= fi.order) {
+                        throw new IllegalArgumentException(
+                                "field '" + fi.name + "' presentIf references '" + base
+                                        + "' which is not earlier in order (forward ref forbidden)");
+                    }
                 }
             }
             // LIST 校验
@@ -228,6 +237,31 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                         + fi.elementClass.getName() + " must not have a @Payload field"
                                         + " (element must be self-bounded)");
                     }
+                }
+            }
+            // size 合法性(custom 字段已单独校验):数值字段 1..64;字节类字段 8 的倍数;-1=动态
+            if (fi.custom == null) {
+                if (fi.size == 0 || fi.size < -1) {
+                    throw new IllegalArgumentException(
+                            "field '" + fi.name + "': invalid size " + fi.size
+                                    + " (1..64 for numeric fields, multiple of 8 for byte-typed fields,"
+                                    + " -1 = dynamic)");
+                }
+                FieldType et = effectiveType(fi);
+                switch (et) {
+                    case INT, UNSIGNED -> {
+                        if (fi.size < 1 || fi.size > 64) {
+                            throw new IllegalArgumentException(
+                                    "field '" + fi.name + "': numeric field requires size 1..64, got " + fi.size);
+                        }
+                    }
+                    case BYTES, STRING, NESTED -> {
+                        if (fi.size > 0 && fi.size % 8 != 0) {
+                            throw new IllegalArgumentException(
+                                    "field '" + fi.name + "': " + et + " field size must be a multiple of 8, got " + fi.size);
+                        }
+                    }
+                    default -> { }
                 }
             }
             // FLOAT/BCD 类型校验(validateReferences 为 static,此处内联类型判定)
@@ -403,6 +437,27 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 if (size < 0) {
                     throw new IllegalStateException("cannot resolve size of field " + fi.name);
                 }
+                // 与 @Payload 模式同标准:普通 BYTES/STRING 的 lengthField 推导尺寸
+                // 必须与实际值一致,否则静默产出毒数据(尾部零填充/截断)
+                if (!fi.lengthField.isEmpty() && fi.custom == null) {
+                    FieldType et = effectiveType(fi);
+                    if (et == FieldType.BYTES || et == FieldType.STRING) {
+                        Object v = fi.field.get(obj);
+                        long actualBits = 0;
+                        if (et == FieldType.STRING && v != null) {
+                            actualBits = ((String) v).getBytes(Charset.forName(fi.charset)).length * 8L;
+                        } else if (et == FieldType.BYTES && v != null) {
+                            actualBits = ((byte[]) v).length * 8L;
+                        }
+                        if (actualBits != size) {
+                            throw new IllegalStateException(
+                                    "field '" + fi.name + "': lengthField '" + fi.lengthField
+                                            + "'=" + numberFieldValue(fieldOf(fi.lengthField), obj)
+                                            + " implies " + size + " bits but value has " + actualBits
+                                            + " bits — fix the length field or the value");
+                        }
+                    }
+                }
                 totalBits += size;
             }
             if (payloadField != null && payloadField.order < 0 && payloadData != null) {
@@ -446,6 +501,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     if (computed < 0) continue;  // 钩子不接管
                     int size = (int) resolveSize(fi, obj, ctx, false, 0, scratch);
                     int truncated = (int) (computed & (size >= 64 ? -1L : ((1L << size) - 1)));
+                    if (fi.endian == com.netproto.annotation.Endian.LITTLE) {
+                        truncated = (int) reverseBytes(truncated, size / 8);   // 回写应用字段端序
+                    }
                     int startByte = checksumOffsets.get(fi.name);
                     writeBitsAtOffset(bytes, startByte, size, truncated);
                 }
@@ -473,7 +531,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     /** 求值 presentIf(预编译 AST,严格模式:未知/未读字段抛 IllegalArgumentException)。 */
-    private static boolean evalPresentIf(FieldInfo fi, FieldContext ctx) {
+    private boolean evalPresentIf(FieldInfo fi, FieldContext ctx) {
         if (fi.presentIfNode == null) {
             return true;
         }
@@ -485,9 +543,15 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
     }
 
-    private static long resolveCtxLong(FieldContext ctx, String name) {
-        // 位索引标识符 name[n]:位图驱动条件的一等语法(与 when 侧一致)
-        Long bit = Expr.resolveBitIndex(n -> ctx.hasRead(n) ? ctx.get(n) : null, name);
+    private long resolveCtxLong(FieldContext ctx, String name) {
+        // 位索引标识符 name[n]:位宽优先按声明 size(注解),动态长度回退 Java 类型宽度
+        Long bit = Expr.resolveBitIndex(
+                n -> ctx.hasRead(n) ? ctx.get(n) : null,
+                n -> {
+                    FieldInfo fi = fieldsByName.get(n);
+                    return fi == null ? -1 : fi.size;
+                },
+                name);
         if (bit != null) {
             return bit;
         }
@@ -804,10 +868,14 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 yield convertToFieldType(fi.field.getType(), v, type == FieldType.UNSIGNED, fi.enumClass, fi.flagClass);
             }
             case FLOAT -> {
-                if (size == 32) {
-                    yield Float.intBitsToFloat((int) cursor.readBits(32));
+                long bits = cursor.readBits(size);
+                if (fi.endian == com.netproto.annotation.Endian.LITTLE) {
+                    bits = reverseBytes(bits, size / 8);
                 }
-                yield Double.longBitsToDouble(cursor.readBits(64));
+                if (size == 32) {
+                    yield Float.intBitsToFloat((int) bits);
+                }
+                yield Double.longBitsToDouble(bits);
             }
             case BCD -> {
                 long raw = cursor.readBits(size);
@@ -868,6 +936,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 } else {
                     // count 驱动(Phase 2a 原逻辑;countUnit=BYTES 时按元素定长换算个数)
                     int count = ctx.getInt(fi.countField);
+                    if (count < -1) {
+                        throw new IllegalStateException("LIST field '" + fi.name + "': countField '"
+                                + fi.countField + "'=" + count + " invalid (must be >= 0, or -1 = null array)");
+                    }
+                    if (count == -1) {
+                        count = 0;   // -1 = null 数组(Kafka 语义):空列表
+                    }
                     if (fi.countUnit == com.netproto.annotation.CountUnit.BYTES) {
                         long elemBits = fixedBitSize(fi.elementClass);
                         count = (int) ((count * 8L + elemBits - 1) / elemBits);
@@ -994,11 +1069,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 cursor.writeBits(v, size);
             }
             case FLOAT -> {
-                if (size == 32) {
-                    cursor.writeBits(Float.floatToIntBits(((Number) value).floatValue()), 32);
-                } else {
-                    cursor.writeBits(Double.doubleToLongBits(((Number) value).doubleValue()), 64);
+                long bits = size == 32
+                        ? Float.floatToIntBits(((Number) value).floatValue())
+                        : Double.doubleToLongBits(((Number) value).doubleValue());
+                if (fi.endian == com.netproto.annotation.Endian.LITTLE) {
+                    bits = reverseBytes(bits, size / 8);
                 }
+                cursor.writeBits(bits, size);
             }
             case BCD -> {
                 long v = convertFromFieldType(value);
@@ -1119,7 +1196,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
     }
 
-    private FieldType effectiveType(FieldInfo fi) {
+    private static FieldType effectiveType(FieldInfo fi) {
         if (fi.type != FieldType.INT) {
             return fi.type; // 显式指定
         }

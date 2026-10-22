@@ -33,3 +33,6 @@ build/
 .vscode/
 .mimosa/
 netproto-web/ui/node_modules/
+
+### 开发过程文档 ###
+docs/superpowers/

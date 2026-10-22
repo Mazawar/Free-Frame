@@ -31,6 +31,10 @@ public final class BitCursor {
         if (size < 0 || size > 64) {
             throw new IllegalArgumentException("size must be 0..64, got " + size);
         }
+        if ((long) bitPos + size > totalBits) {
+            throw new IllegalStateException("bit read past end: need " + size + " bits at bit offset "
+                    + bitPos + " but only " + (totalBits - bitPos) + " remain");
+        }
         long value = 0;
         int bits = size;
         while (bits > 0) {
@@ -46,22 +50,26 @@ public final class BitCursor {
         return value;
     }
 
-    /** 从当前位偏移读 size 位为字节数组(BYTES/STRING/NESTED 用)。对齐快路径走 arraycopy。 */
+    /** 从当前位偏移读 size 位为字节数组(BYTES/STRING/NESTED 用)。对齐快路径走 arraycopy;
+     *  非对齐走位级读取(跨字节位移),保证非字节对齐的 BYTES 字段取值正确。 */
     public byte[] readBytes(int size) {
         if (size % 8 != 0) {
             throw new IllegalArgumentException("byte read needs a multiple of 8 bits, got " + size);
+        }
+        if ((long) bitPos + size > totalBits) {
+            throw new IllegalStateException("byte read past end: need " + size / 8 + " bytes at bit offset "
+                    + bitPos + " but only " + (totalBits - bitPos) / 8 + " bytes remain");
         }
         int n = size / 8;
         byte[] out = new byte[n];
         if (bitPos % 8 == 0) {
             System.arraycopy(data, baseByte + bitPos / 8, out, 0, n);   // 常见对齐场景:内建拷贝
+            bitPos += size;
         } else {
             for (int i = 0; i < n; i++) {
-                int absBit = baseByte * 8 + bitPos + i * 8;
-                out[i] = data[absBit >>> 3];
+                out[i] = (byte) readBits(8);   // readBits 自行推进游标
             }
         }
-        bitPos += size;
         return out;
     }
 
@@ -69,6 +77,10 @@ public final class BitCursor {
     public void writeBits(long value, int size) {
         if (size < 0 || size > 64) {
             throw new IllegalArgumentException("size must be 0..64, got " + size);
+        }
+        if ((long) bitPos + size > totalBits) {
+            throw new IllegalStateException("bit write past end: need " + size + " bits at bit offset "
+                    + bitPos + " but buffer has " + totalBits + " bits");
         }
         int bits = size;
         while (bits > 0) {
@@ -84,14 +96,23 @@ public final class BitCursor {
         }
     }
 
-    /** 写入字节(BYTES/STRING/NESTED 用),size 必须是 8 的倍数。 */
+    /** 写入字节(BYTES/STRING/NESTED 用)。对齐快路径走 arraycopy;
+     *  非对齐走位级写入(读改写相邻字节),与 readBytes 的非对齐语义对称。 */
     public void writeBytes(byte[] bytes) {
-        if (bitPos % 8 != 0) {
-            throw new IllegalStateException("writeBytes requires byte-aligned cursor, bitPos=" + bitPos);
+        if ((long) bitPos + (long) bytes.length * 8 > totalBits) {
+            throw new IllegalStateException("byte write past end: need " + bytes.length
+                    + " bytes at bit offset " + bitPos + " but buffer has "
+                    + (totalBits - bitPos) / 8 + " bytes left");
         }
-        int byteStart = baseByte + bitPos / 8;
-        System.arraycopy(bytes, 0, data, byteStart, bytes.length);
-        bitPos += bytes.length * 8;
+        if (bitPos % 8 == 0) {
+            int byteStart = baseByte + bitPos / 8;
+            System.arraycopy(bytes, 0, data, byteStart, bytes.length);
+            bitPos += bytes.length * 8;
+        } else {
+            for (byte b : bytes) {
+                writeBits(b, 8);   // writeBits 自行推进游标
+            }
+        }
     }
 
     public int bitOffset() {

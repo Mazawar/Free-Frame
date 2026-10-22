@@ -64,3 +64,30 @@
 
 ## 附:调研原始产出
 两路调研(机制矩阵 M1-M50 / M1-M45、十大怪癖榜、验证 URL)见会话记录;如需长期保存可归档至 docs/。
+
+## 七、真实协议验证(2026-10-22 第二轮)
+
+`netproto-core/src/test/java/com/netproto/protocols/real/` 下 **18 个协议族 / 46 个用例**,全部权威字节向量断言 + round-trip,全仓 255 个测试全绿(core 216 / web 16 / demo 23):
+
+| 领域 | 协议 | 向量来源 | 表达方式 |
+|---|---|---|---|
+| 电力/工控 | Modbus RTU | CRC-16/MODBUS 标准向量 + 经典帧 11 03 006B 0003 7687 | 纯声明式 + Checksum 钩子(LE 字段直驱) |
+| | Modbus TCP | MBAP 经典帧 | 纯声明式 |
+| | DL/T 645-2007 | 规约读通信地址帧 + CS 模 256 自证 | 纯声明式 + L2(+0x33 混淆) |
+| | IEC 60870-5-101 | FT1.2 定长帧 + 双写长度自证 | 纯声明式 + Checksum |
+| | IEC 60870-5-104 | STARTDT/TESTFR/S/I 规范帧 | 纯声明式(位拆三态) |
+| | HART | 命令 0 长帧 + XOR 自证 | 纯声明式 + Checksum |
+| 车载 | SOME/IP | AUTOSAR 头示例 | 纯声明式(lengthAdjust) |
+| | ISO-TP | SF/FF/FC/CF 向量 | 纯声明式(nibble 12bit 长度) |
+| 网络 | ARP | who-has 权威向量 + gratuitous | 纯声明式(四地址 lengthField) |
+| | ICMP echo | RFC 1071 反码和 0xFFFF 性质 | 纯声明式 + Checksum + @Payload |
+| | DNS | 权威 A 查询向量 | 纯声明式(sentinel 标签列表) |
+| | Ethernet▸IPv4▸UDP▸DNS | 全栈 75B 整帧 | 分派树 + StackEncoder 自动接线 |
+| IoT/通用 | MQTT 3.1.1 | 规范 CONNECT 示例 | 纯声明式 + 内置 Varint |
+| | MQTT-SN | SEARCHGW/CONNECT 双形态 | L2(0x01 长度转义) |
+| | CoAP | 头部/options/payload 向量 + 13/14 逃逸 | L2(nibble delta) |
+| | WebSocket | RFC 6455 §5.7 掩码向量 + 126 逃逸 | 纯声明式 + L2(掩码 XOR) |
+| | QUIC varint | RFC 9000 §16 四向量 | L2(前缀定宽) |
+| | BSON | 手导向量 {a:1}/{hello:"world"} | 纯声明式(全小端) |
+
+**使用效果结论**:18 个协议族中 13 个纯声明式完成(72%),5 个借用 L2 逃生舱(变长整数/转义/混淆/掩码类,均在 20~40 行内解决);边界测试发现的 9 项缺陷修复后,真实协议建模无一处被引擎卡住。

@@ -71,7 +71,7 @@ mvn install
 ```
 
 想直接看运行效果,切到演示分支:`git switch redesign/protocol-stack`,
-再 `mvn -pl netproto-demo spring-boot:run`,打开 http://localhost:8848。
+再 `mvn -pl netproto-demo spring-boot:run`,打开 http://localhost:8848/netproto/。
 
 前端源码开发(热更新,`/api` 代理到 8848):
 
@@ -79,7 +79,7 @@ mvn install
 cd netproto-web/ui
 npm install
 npm run dev          # http://localhost:5173
-npm run build        # 产物直接落进 netproto-web/src/main/resources/static,打 jar 即带页面
+npm run build        # 产物直接落进 netproto-web/src/main/resources/netproto-ui,打 jar 即带页面
 ```
 
 在自己的 Spring Boot 工程里引入 starter:
@@ -92,7 +92,9 @@ npm run build        # 产物直接落进 netproto-web/src/main/resources/static
 </dependency>
 ```
 
-加上依赖、写好 `@Protocol` 类,启动即完成注册与装配。
+加上依赖、写好 `@Protocol` 类,启动即完成注册与装配;观测台在
+`/netproto/`(`netproto.ui-base-path` 可改),REST 在 `/api/netproto/**`,
+不占用宿主应用的根路径。
 
 ### 三分钟接入
 
@@ -123,7 +125,8 @@ DecodedPacket p = decoder.decode(frame, "udp", 0, 1);
 MyProtocol msg = (MyProtocol) p.layers().get(3).packet();
 ```
 
-
+端到端示例见 `netproto-demo` 的 `PowerDistProtocolTest`(编码逐字节期望、手拼 hex 解码、
+往返无损、整栈分派、计数驱动变长列表五个用例)。
 
 ## 文档
 
@@ -164,6 +167,7 @@ core 不依赖 Spring —— 不用观测台也可以把它当纯编解码库嵌
 ```yaml
 netproto:
   enabled: true              # 总开关
+  ui-base-path: /netproto    # 观测台挂载路径(不占宿主应用根路径;"/" 会被拒绝)
   base-packages: []          # 用户协议扫描包;留空 = 自动探测 @SpringBootApplication 所在包
   builtin-packages:          # 内置栈扫描包(设 [] 可禁用)
     - com.netproto.protocols.builtin
@@ -175,7 +179,7 @@ netproto:
 
 ## 观测台与 REST / SSE API
 
-观测台(`http://localhost:8848`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
+观测台(`http://localhost:8848/netproto/`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
 按协议/多级分组过滤、分层发包面板(字段表单,长度/校验和/选择子自动)、pcap 导入导出。
 前端源码在 `netproto-web/ui`(Vite,`npm run dev` 热更新)。
 

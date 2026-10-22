@@ -77,6 +77,46 @@ public class NetprotoAutoConfiguration {
         return new NetprotoController(registry, sessionManager, rawSender, stackEncoder, appContext, props);
     }
 
+    /**
+     * 观测台静态页挂载在专属路径(netproto.ui-base-path,默认 /netproto)。
+     * 页面资源放在独立的 classpath:/netproto-ui/ 目录、只经本 handler 暴露,
+     * 不进 Spring Boot 默认的 static/ —— starter 嵌入宿主工程时不占宿主根路径。
+     */
+    @Bean
+    public org.springframework.web.servlet.config.annotation.WebMvcConfigurer netprotoUiMount(
+            NetprotoProperties props) {
+        return new org.springframework.web.servlet.config.annotation.WebMvcConfigurer() {
+            @Override
+            public void addResourceHandlers(
+                    org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry registry) {
+                String base = props.normalizedUiBasePath();
+                registry.addResourceHandler(base + "/**")
+                        .addResourceLocations("classpath:/netproto-ui/");
+                log.info("netproto: observatory UI mounted at {} (REST stays at /api/netproto/**)", base);
+            }
+        };
+    }
+
+    /** 裸挂载路径转发到 index.html(/netproto 与 /netproto/ 都直达观测台)。
+     *  作为 @Configuration 嵌套 @Component 由 Spring 自动注册,无需再声明 @Bean。 */
+    @org.springframework.web.bind.annotation.RestController
+    public static class UiForwardController {
+        private final NetprotoProperties props;
+
+        public UiForwardController(NetprotoProperties props) {
+            this.props = props;
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping({
+                "${netproto.ui-base-path:/netproto}",
+                "${netproto.ui-base-path:/netproto}/"
+        })
+        public org.springframework.web.servlet.ModelAndView forwardIndex() {
+            return new org.springframework.web.servlet.ModelAndView(
+                    "forward:" + props.normalizedUiBasePath() + "/index.html");
+        }
+    }
+
     // ---- 扫描 ----
 
     private static List<String> resolveUserPackages(BeanFactory beanFactory, NetprotoProperties props) {

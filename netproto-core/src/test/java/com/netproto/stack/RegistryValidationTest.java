@@ -169,8 +169,9 @@ class RegistryValidationTest {
 
     @Protocol(id = "group-variable")
     static class GroupVariable {
-        @ProtocolField(order = 1, size = 4, group = "G") private int a;
-        @ProtocolField(order = 2, group = "G") private int b;
+        // 组内变长成员:BYTES+lengthField(codec 层合法的动态长度),组校验应拒绝
+        @ProtocolField(order = 1, size = 8, group = "G") private int len;
+        @ProtocolField(order = 2, lengthField = "len", group = "G") private byte[] b;
     }
 
     // ---- L3 逃生舱 fixture ----

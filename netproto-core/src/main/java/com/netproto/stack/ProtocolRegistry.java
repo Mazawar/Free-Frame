@@ -260,8 +260,12 @@ public final class ProtocolRegistry {
     }
 
     private static long resolveLenient(FieldContext ctx, String name) {
-        // 位索引标识符 name[n](与 presentIf 侧同款一等语法)
-        Long bit = Expr.resolveBitIndex(n -> ctx.hasRead(n) ? ctx.get(n) : null, name);
+        // 位索引标识符 name[n](与 presentIf 侧同款一等语法);位宽优先按声明 size
+        Object entity = ctx.entity();
+        Long bit = Expr.resolveBitIndex(
+                n -> ctx.hasRead(n) ? ctx.get(n) : null,
+                n -> declaredFieldSize(entity, n),
+                name);
         if (bit != null) {
             return bit;
         }
@@ -276,5 +280,20 @@ public final class ProtocolRegistry {
             return b ? 1 : 0;
         }
         throw new Expr.UnknownIdentifier(name + " (non-numeric)");
+    }
+
+    /** 实体字段声明位宽(@ProtocolField size;无注解/动态长度返回 -1)。 */
+    private static int declaredFieldSize(Object entity, String name) {
+        if (entity == null) {
+            return -1;
+        }
+        for (java.lang.reflect.Field f : CTX_FIELDS.computeIfAbsent(
+                entity.getClass(), ProtocolRegistry::annotatedFields)) {
+            if (f.getName().equals(name)) {
+                ProtocolField ann = f.getAnnotation(ProtocolField.class);
+                return ann == null ? -1 : ann.size();
+            }
+        }
+        return -1;
     }
 }

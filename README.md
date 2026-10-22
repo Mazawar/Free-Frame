@@ -40,6 +40,15 @@ class UdpSegment { /* 字段 */ }
 class MyProtocol { /* 字段 */ }
 ```
 
+```mermaid
+flowchart LR
+    A["原始字节<br/>网卡 / pcap / socket"] --> D["StackDecoder<br/>自顶向下分派"]
+    D --> T["DecodedPacket<br/>层级字段树 + POJO"]
+    T --> O["观测台 / 业务代码"]
+    E["StackEncoder<br/>选择子·长度·校验和自动接线"] --> B["线上字节"]
+    O -. "同一份 @Protocol 注解" .-> E
+```
+
 ## 特性一览
 
 - **声明式协议定义** —— 字段顺序、位宽、端序、变长、条件、循环、TLV 分派,零手写序列化代码
@@ -150,6 +159,16 @@ netproto:
 观测台(`http://localhost:8848`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
 按协议/多级分组过滤、分层发包面板(字段表单,长度/校验和/选择子自动)、pcap 导入导出。
 前端源码在 `netproto-web/ui`(Vite,`npm run dev` 热更新)。
+
+**帧详情** —— 左侧协议分组过滤,中部实时帧表格,选中帧展示层级字段树与 hex/ASCII
+双视图,点树节点字节选区联动高亮:
+
+![观测台帧详情与 hex 选区](docs/images/observatory-detail.png)
+
+**分层发包** —— 选目标协议自动推导整条协议链,分层表单带格式徽标(`MAC·6B` / `IP·4B` /
+`dec·2B`),长度/校验和/选择子自动,可切 JSON 高级模式:
+
+![分层发包面板](docs/images/observatory-send-dialog.png)
 
 ```
 GET  /api/netproto/config             # 运行配置只读视图

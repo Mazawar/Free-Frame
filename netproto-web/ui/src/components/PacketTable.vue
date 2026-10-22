@@ -1,13 +1,29 @@
 <script setup lang="ts">
-import { computed, h, nextTick, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NDataTable, type DataTableColumns } from 'naive-ui'
 import type { PacketSummary } from '../types'
 import { filteredNewestFirst, selectPacket, store } from '../store'
 import { fmtTime, layerColor, protocolOf } from '../utils/format'
 
 const tableRef = ref<InstanceType<typeof NDataTable> | null>(null)
-// 首次填充时重建表格:挂载早期容器测高为 0,虚拟列表对整批灌入的行不会自愈
+// 虚拟列表对「容器 0 高 / 页面隐藏时灌入的数据」不会自愈:重建表格强制重测。
+// heal 覆盖四个入口:首填充、挂载时已有数据(恢复/SSE 先于 bootstrap)、布局晚稳定、页面重新可见/resize。
 const tableKey = ref(0)
+let healTimer: number | undefined
+
+function heal() {
+  if (rows.value.length === 0) return
+  tableKey.value++
+}
+
+function scheduleHeal() {
+  clearTimeout(healTimer)
+  healTimer = window.setTimeout(heal, 350)
+}
+
+function onVisibility() {
+  if (!document.hidden) scheduleHeal()
+}
 
 const rows = computed(() => filteredNewestFirst.value)
 
@@ -73,9 +89,24 @@ const rowProps = (r: PacketSummary) => ({
 watch(() => rows.value.length, (n, old) => {
   if (old === 0 && n > 0) {
     tableKey.value++
+    scheduleHeal()   // 布局/字体晚稳定时再兜一次
     return
   }
   nextTick(() => t0().scrollTo?.({ top: 0 }))
+})
+
+onMounted(() => {
+  if (rows.value.length > 0) {
+    nextTick(heal)   // 恢复/SSE 先于 bootstrap 到达:mount 中测量不可靠,次帧重建
+  }
+  document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('resize', scheduleHeal)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('resize', scheduleHeal)
+  clearTimeout(healTimer)
 })
 
 function t0() {

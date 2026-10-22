@@ -1,7 +1,7 @@
 package com.netproto.spring.config;
 
-import com.netproto.spring.capture.CaptureEngine;
 import com.netproto.spring.capture.RawSender;
+import com.netproto.spring.capture.SessionManager;
 import com.netproto.stack.ProtocolRegistry;
 import com.netproto.stack.StackDecoder;
 import com.netproto.stack.StackEncoder;
@@ -57,9 +57,9 @@ public class NetprotoAutoConfiguration {
     }
 
     @Bean
-    public CaptureEngine captureEngine(StackDecoder decoder, NetprotoProperties props) {
-        return new CaptureEngine(decoder, props.getRingSize(),
-                (int) props.getRingBytes().toBytes(), props.getSnaplen());
+    public SessionManager sessionManager(StackDecoder decoder, NetprotoProperties props) {
+        return new SessionManager(decoder, props.getRingSize(),
+                (int) props.getRingBytes().toBytes(), props.getSnaplen(), props.getMaxSessions());
     }
 
     @Bean
@@ -69,12 +69,12 @@ public class NetprotoAutoConfiguration {
 
     @Bean
     public NetprotoController netprotoController(ProtocolRegistry registry,
-                                                 CaptureEngine captureEngine,
+                                                 SessionManager sessionManager,
                                                  RawSender rawSender,
                                                  StackEncoder stackEncoder,
                                                  NetprotoProperties props,
                                                  org.springframework.context.ApplicationContext appContext) {
-        return new NetprotoController(registry, captureEngine, rawSender, stackEncoder, appContext, props);
+        return new NetprotoController(registry, sessionManager, rawSender, stackEncoder, appContext, props);
     }
 
     // ---- 扫描 ----

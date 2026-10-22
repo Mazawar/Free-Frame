@@ -347,13 +347,13 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ./mvnw test 2>&1 | tr -cd '\11\12\15\40-\176' | grep "Tests run" | tail -1
 ```
 
-当前 **160 个测试**:
+当前 **152 个测试**:
 
 | 模块 | 数量 | 覆盖 |
 |---|---|---|
 | core | 117 | 引擎 + 栈 + 内置协议栈 + 特性试金石(含 pcap4j parity 对照:IPv4/IPv6/TCP) |
-| web | 10 | 自动装配扫描、pcap 读写、摘要格式化 |
-| demo | 33 | 三套协议并存分派、编码/解码演示、帧尾 CRC 边界、REST 冒烟 |
+| web | 12 | 自动装配扫描、pcap 读写、多会话隔离/上限、摘要格式化 |
+| demo | 23 | 三套协议并存分派、编码/解码演示、帧尾 CRC 边界、REST 冒烟 |
 
 覆盖范围:位级 / 条件 / 变长 / LIST / TLV / sentinel / 校验和 / parity 对照、Expr 文法、
 四层分派、IPv6 双栈、VLAN、未注册端口停止、畸形层停止、选择子自动接线、长度钩子、

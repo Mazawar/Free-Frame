@@ -35,7 +35,7 @@ public final class StackDecoder {
 
     /**
      * 高流量采集路径用 wantRanges=false:跳过每层位区间簿记(字段↔字节联动数据)。
-     * 采集摘要只消费 POJO 字段;UI 详情由 CaptureEngine.detail 按需重解码(走全量路径)。
+     * 采集摘要只消费 POJO 字段;UI 详情由 CaptureSession.detail 按需重解码(走全量路径)。
      */
     public DecodedPacket decode(byte[] frame, String iface, long timestampMillis, int capturedCount,
                                 boolean wantRanges) {

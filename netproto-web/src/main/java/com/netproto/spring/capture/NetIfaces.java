@@ -6,7 +6,7 @@ import org.pcap4j.core.Pcaps;
 
 import java.util.List;
 
-/** 网卡查找/列表小工具(CaptureEngine/RawSender/Web 共用)。 */
+/** 网卡查找/列表小工具(CaptureSession/RawSender/Web 共用)。 */
 public final class NetIfaces {
 
     private NetIfaces() {}

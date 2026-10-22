@@ -1,7 +1,7 @@
 package com.netproto.demo.web;
 
 import com.netproto.demo.protocol.powerdist.PowerDistSamples;
-import com.netproto.spring.capture.CaptureEngine;
+import com.netproto.spring.capture.SessionManager;
 import com.netproto.stack.StackEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,11 +18,11 @@ import java.util.Map;
 @RequestMapping("/api/demo")
 public class DemoSampleController {
 
-    private final CaptureEngine capture;
+    private final SessionManager sessions;
     private final PowerDistSamples samples;
 
-    public DemoSampleController(CaptureEngine capture, StackEncoder encoder) {
-        this.capture = capture;
+    public DemoSampleController(SessionManager sessions, StackEncoder encoder) {
+        this.sessions = sessions;
         this.samples = new PowerDistSamples(encoder);
     }
 
@@ -41,7 +41,7 @@ public class DemoSampleController {
         sizes.put("pd-status-report", frames[2].length);
         sizes.put("pd-param-query-resp", frames[3].length);
         for (byte[] f : frames) {
-            capture.inject("demo", f);
+            sessions.defaultSession().inject("demo", f);
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", "injected");

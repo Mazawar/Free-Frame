@@ -34,7 +34,7 @@ class NetprotoPcapTest {
         MvcResult r = mockMvc.perform(get("/api/netproto/export"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Disposition",
-                        org.hamcrest.Matchers.matchesPattern("attachment; filename=netproto-0f-.*\\.pcap")))
+                        org.hamcrest.Matchers.matchesPattern("attachment; filename=netproto-default-0f-.*\\.pcap")))
                 .andReturn();
         byte[] pcap = r.getResponse().getContentAsByteArray();
         assertEquals(24, pcap.length);   // 仅全局头

@@ -33,6 +33,9 @@ public class NetprotoProperties {
     /** 采集 snaplen。 */
     private int snaplen = 65536;
 
+    /** 并发采集会话上限(含 default 兼容会话)。每会话占一个 native 捕获句柄 + 两条线程,上限护资源。 */
+    private int maxSessions = 4;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -87,5 +90,13 @@ public class NetprotoProperties {
 
     public void setSnaplen(int snaplen) {
         this.snaplen = snaplen;
+    }
+
+    public int getMaxSessions() {
+        return maxSessions;
+    }
+
+    public void setMaxSessions(int maxSessions) {
+        this.maxSessions = maxSessions;
     }
 }

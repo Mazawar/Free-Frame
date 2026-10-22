@@ -3,10 +3,12 @@ package com.netproto.spring.web;
 import com.netproto.annotation.Payload;
 import com.netproto.annotation.Protocol;
 import com.netproto.annotation.ProtocolField;
-import com.netproto.spring.capture.CaptureEngine;
+import com.netproto.spring.capture.CaptureSession;
+import com.netproto.spring.capture.FrameSummary;
 import com.netproto.spring.capture.NetIfaces;
 import com.netproto.spring.capture.PcapFile;
 import com.netproto.spring.capture.RawSender;
+import com.netproto.spring.capture.SessionManager;
 import com.netproto.stack.DecodedPacket;
 import com.netproto.stack.ProtocolRegistry;
 import com.netproto.stack.StackEncoder;
@@ -14,10 +16,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -44,17 +48,17 @@ public class NetprotoController {
     private static final Logger log = LoggerFactory.getLogger(NetprotoController.class);
 
     private final ProtocolRegistry registry;
-    private final CaptureEngine capture;
+    private final SessionManager sessions;
     private final RawSender sender;
     private final StackEncoder encoder;
     private final ObjectMapper objectMapper;
     private final com.netproto.spring.config.NetprotoProperties props;
 
-    public NetprotoController(ProtocolRegistry registry, CaptureEngine capture, RawSender sender,
+    public NetprotoController(ProtocolRegistry registry, SessionManager sessions, RawSender sender,
                               StackEncoder encoder, ApplicationContext appContext,
                               com.netproto.spring.config.NetprotoProperties props) {
         this.registry = registry;
-        this.capture = capture;
+        this.sessions = sessions;
         this.sender = sender;
         this.encoder = encoder;
         this.props = props;
@@ -329,7 +333,7 @@ public class NetprotoController {
         return fields;
     }
 
-    // ---- 采集 ----
+    // ---- 采集:旧端点(全部落在 default 会话上,路径/入参/返回结构不变,前端零改动) ----
 
     @GetMapping("/interfaces")
     public List<Map<String, String>> interfaces() throws Exception {
@@ -345,29 +349,140 @@ public class NetprotoController {
 
     @PostMapping("/capture/start")
     public Map<String, Object> startCapture(@RequestBody Map<String, String> body) throws Exception {
-        String iface = body.get("iface");
-        if (iface == null || iface.isBlank()) {
-            throw new IllegalArgumentException("iface is required");
+        String iface = requiredIface(body);
+        CaptureSession def = sessions.defaultSession();
+        if (def.isRunning()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "capture already running on " + def.iface() + " — stop it first"
+                            + " (parallel captures: POST /sessions)");
         }
-        capture.start(iface, body.get("bpf"));
-        return capture.status();
+        def.start(iface, body.get("bpf"));
+        return def.status();
     }
 
     @PostMapping("/capture/stop")
     public Map<String, Object> stopCapture() {
-        capture.stop();
-        return capture.status();
+        CaptureSession def = sessions.defaultSession();
+        def.stop();
+        return def.status();
     }
 
     @GetMapping("/capture/status")
     public Map<String, Object> status() {
-        return capture.status();
+        return sessions.defaultSession().status();
     }
 
     @GetMapping("/packets")
     public List<Map<String, Object>> packets(@RequestParam(defaultValue = "100") int limit) {
+        return packetRows(sessions.defaultSession(), limit);
+    }
+
+    /** 单帧完整详情(树/字段/字节区间/hex):摘要不常驻解析树,按需重解码(Wireshark 点击时解析)。 */
+    @GetMapping("/packet/{seq}")
+    public ResponseEntity<Map<String, Object>> packetDetail(@PathVariable long seq) {
+        return packetDetail(sessions.defaultSession(), seq);
+    }
+
+    // ---- 多会话采集(每会话独立网卡句柄/BPF/缓冲/序号:多页面并行抓不同包) ----
+
+    /** 全部会话状态(default 在前),含各自丢帧计数。 */
+    @GetMapping("/sessions")
+    public List<Map<String, Object>> listSessions() {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (com.netproto.spring.capture.FrameSummary s : capture.recent(limit)) {
+        for (CaptureSession s : sessions.all()) {
+            out.add(s.status());
+        }
+        return out;
+    }
+
+    /** 创建并启动新会话 {iface, bpf?} → {sessionId, ...status}。 */
+    @PostMapping("/sessions")
+    public Map<String, Object> createSession(@RequestBody Map<String, String> body) throws Exception {
+        String iface = requiredIface(body);
+        if (!sessions.canCreate()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "session limit reached (" + sessions.maxSessions()
+                            + ") — delete one first: DELETE /api/netproto/sessions/{id}");
+        }
+        return sessions.create(iface, body.get("bpf")).status();
+    }
+
+    @GetMapping("/sessions/{id}/status")
+    public Map<String, Object> sessionStatus(@PathVariable String id) {
+        return sessionOr404(id).status();
+    }
+
+    @PostMapping("/sessions/{id}/stop")
+    public Map<String, Object> stopSession(@PathVariable String id) {
+        CaptureSession s = sessionOr404(id);
+        s.stop();
+        return s.status();
+    }
+
+    /** 删除会话:停止并释放缓冲;SSE 订阅端先收到 session-closed 事件再断开。
+     *  default 也可删——旧端点下次调用会懒重建。 */
+    @DeleteMapping("/sessions/{id}")
+    public Map<String, Object> deleteSession(@PathVariable String id) {
+        if (!sessions.delete(id)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "unknown session: " + id);
+        }
+        return Map.of("sessionId", id, "status", "deleted");
+    }
+
+    @GetMapping("/sessions/{id}/packets")
+    public List<Map<String, Object>> sessionPackets(@PathVariable String id,
+                                                    @RequestParam(defaultValue = "100") int limit) {
+        return packetRows(sessionOr404(id), limit);
+    }
+
+    @GetMapping("/sessions/{id}/packet/{seq}")
+    public ResponseEntity<Map<String, Object>> sessionPacketDetail(@PathVariable String id,
+                                                                   @PathVariable long seq) {
+        return packetDetail(sessionOr404(id), seq);
+    }
+
+    /** 会话版 SSE(事件格式与 /stream 完全一致;会话删除时发 session-closed 后断开)。 */
+    @GetMapping(path = "/sessions/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter sessionStream(@PathVariable String id) {
+        return openStream(sessionOr404(id));
+    }
+
+    @PostMapping("/sessions/{id}/inject")
+    public Map<String, Object> sessionInject(@PathVariable String id,
+                                             @RequestBody Map<String, String> body) {
+        return injectBody(sessionOr404(id), body);
+    }
+
+    @GetMapping("/sessions/{id}/export")
+    public ResponseEntity<byte[]> sessionExport(@PathVariable String id) {
+        return exportPcap(sessionOr404(id));
+    }
+
+    @PostMapping("/sessions/{id}/import")
+    public Map<String, Object> sessionImport(@PathVariable String id,
+                                             @RequestParam("file") MultipartFile file) throws IOException {
+        return importPcap(sessionOr404(id), file);
+    }
+
+    private CaptureSession sessionOr404(String id) {
+        CaptureSession s = sessions.get(id);
+        if (s == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "unknown session: " + id);
+        }
+        return s;
+    }
+
+    private static String requiredIface(Map<String, String> body) {
+        String iface = body.get("iface");
+        if (iface == null || iface.isBlank()) {
+            throw new IllegalArgumentException("iface is required");
+        }
+        return iface;
+    }
+
+    private static List<Map<String, Object>> packetRows(CaptureSession session, int limit) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (FrameSummary s : session.recent(limit)) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("seq", s.seq());
             m.put("ts", s.ts());
@@ -385,10 +500,8 @@ public class NetprotoController {
         return out;
     }
 
-    /** 单帧完整详情(树/字段/字节区间/hex):摘要不常驻解析树,按需重解码(Wireshark 点击时解析)。 */
-    @GetMapping("/packet/{seq}")
-    public ResponseEntity<Map<String, Object>> packetDetail(@PathVariable long seq) {
-        com.netproto.stack.DecodedPacket p = capture.detail(seq);
+    private ResponseEntity<Map<String, Object>> packetDetail(CaptureSession session, long seq) {
+        DecodedPacket p = session.detail(seq);
         return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(toJson(p));
     }
 
@@ -402,20 +515,30 @@ public class NetprotoController {
 
     private static final Object KEEPALIVE = new Object();
 
+    /** 会话删除信号:写线程收到后发 session-closed 事件并收尾(与数据同通道,天然串行)。 */
+    private static final Object SESSION_CLOSED = new Object();
+
     /**
      * SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发具名 ping 事件)。
+     * 旧端点:固定订阅 default 会话。
      * <p>
-     * 推送轻量 {@link com.netproto.spring.capture.FrameSummary}(单帧约两百字节,不含协议树/hex);
+     * 推送轻量 {@link FrameSummary}(单帧约两百字节,不含协议树/hex);
      * 详情由前端点击时经 GET /packet/{seq} 按需拉取。
-     * 发送绝不跑在抓包线程上:监听器只往有界队列投递,每连接一个单写线程串行发送
+     * 发送绝不跑在抓包/解码线程上:监听器只往有界队列投递,每连接一个单写线程串行发送
      * (包 + ping 同通道,SseEmitter 并发 send 非线程安全)。队列满则丢弃本连接的
      * 新帧——冻结/慢速的浏览器只丢自己的画面,不会把背压传导回采集管线。
      * <p>
      * ping 是具名事件(非注释):前端可见并以此驱动看门狗——连接因任何原因静默
      * (半开 socket/清理竞态/中间层吞流)超过两个周期,浏览器强制断开重连,自愈。
+     * 会话被 DELETE 时订阅端先收到 session-closed 再断开。
      */
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
+        return openStream(sessions.defaultSession());
+    }
+
+    /** 会话版 SSE:GET /sessions/{id}/stream(事件格式与 /stream 完全一致)。 */
+    private SseEmitter openStream(CaptureSession session) {
         SseEmitter emitter = new SseEmitter(0L);
         BlockingQueue<Object> queue = new ArrayBlockingQueue<>(2048);
         var writer = Executors.newSingleThreadExecutor(r -> {
@@ -425,13 +548,15 @@ public class NetprotoController {
         });
         ScheduledFuture<?> ping = sseKeepalive.scheduleAtFixedRate(
                 () -> queue.offer(KEEPALIVE), 15, 15, TimeUnit.SECONDS);
-        Consumer<com.netproto.spring.capture.FrameSummary> listener = queue::offer;
+        Consumer<FrameSummary> listener = queue::offer;
+        Runnable closeCallback = () -> queue.offer(SESSION_CLOSED);
         var closed = new java.util.concurrent.atomic.AtomicBoolean(false);
         Runnable cleanup = () -> {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            capture.removeListener(listener);
+            session.removeListener(listener);
+            session.removeCloseCallback(closeCallback);
             ping.cancel(false);
             writer.shutdownNow();
         };
@@ -439,7 +564,12 @@ public class NetprotoController {
             try {
                 while (true) {
                     Object item = queue.take();
-                    if (item instanceof com.netproto.spring.capture.FrameSummary s) {
+                    if (item == SESSION_CLOSED) {
+                        emitter.send(SseEmitter.event().name("session-closed"));
+                        emitter.complete();
+                        return;
+                    }
+                    if (item instanceof FrameSummary s) {
                         emitter.send(SseEmitter.event().name("packet")
                                 .data(objectMapper.writeValueAsString(s), MediaType.APPLICATION_JSON));
                     } else {
@@ -454,7 +584,8 @@ public class NetprotoController {
                 cleanup.run();
             }
         });
-        capture.addListener(listener);
+        session.addListener(listener);
+        session.addCloseCallback(closeCallback);
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
         emitter.onError(x -> cleanup.run());
@@ -483,6 +614,10 @@ public class NetprotoController {
     /** {hex: "aa bb ..", iface?: "inject"} 注入原始字节帧,页面经 SSE 实时看到解析结果。 */
     @PostMapping("/inject")
     public Map<String, Object> inject(@RequestBody Map<String, String> body) {
+        return injectBody(sessions.defaultSession(), body);
+    }
+
+    private Map<String, Object> injectBody(CaptureSession session, Map<String, String> body) {
         String hex = body.getOrDefault("hex", "").replace(" ", "").replace("\n", "");
         if (hex.isEmpty() || (hex.length() & 1) != 0) {
             throw new IllegalArgumentException("hex is required (even-length hex string)");
@@ -495,26 +630,31 @@ public class NetprotoController {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("hex contains non-hex characters");
         }
-        capture.inject(body.getOrDefault("iface", "inject"), raw);
+        session.inject(body.getOrDefault("iface", "inject"), raw);
         return Map.of("status", "injected", "bytes", raw.length);
     }
 
     // ---- pcap 导出/导入(与 tcpdump/Wireshark 互通) ----
 
-    /** 导出环形缓冲(旧→新)为标准 pcap,Ethernet 链路;文件名带帧数。 */
+    /** 导出环形缓冲(旧→新)为标准 pcap,Ethernet 链路;文件名带会话与帧数。 */
     @GetMapping("/export")
     public ResponseEntity<byte[]> exportPcap() {
-        List<com.netproto.spring.capture.FrameSummary> newest = capture.recent(Integer.MAX_VALUE);   // 新→旧
+        return exportPcap(sessions.defaultSession());
+    }
+
+    private ResponseEntity<byte[]> exportPcap(CaptureSession session) {
+        List<FrameSummary> newest = session.recent(Integer.MAX_VALUE);   // 新→旧
         List<PcapFile.Record> records = new ArrayList<>(newest.size());
         for (int i = newest.size() - 1; i >= 0; i--) {
-            com.netproto.spring.capture.FrameSummary s = newest.get(i);
+            FrameSummary s = newest.get(i);
             records.add(new PcapFile.Record(s.ts(), s.raw()));
         }
         String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .header("Content-Disposition",
-                        "attachment; filename=netproto-" + records.size() + "f-" + ts + ".pcap")
+                        "attachment; filename=netproto-" + session.id() + "-"
+                                + records.size() + "f-" + ts + ".pcap")
                 .body(PcapFile.write(records));
     }
 
@@ -525,7 +665,11 @@ public class NetprotoController {
      *  采集运行中拒绝(seq 会与导入帧冲突)。 */
     @PostMapping("/import")
     public Map<String, Object> importPcap(@RequestParam("file") MultipartFile file) throws IOException {
-        if (capture.isRunning()) {
+        return importPcap(sessions.defaultSession(), file);
+    }
+
+    private Map<String, Object> importPcap(CaptureSession session, MultipartFile file) throws IOException {
+        if (session.isRunning()) {
             throw new IllegalArgumentException("capture is running: stop it before importing a pcap");
         }
         if (file.getSize() > MAX_IMPORT_BYTES) {
@@ -535,9 +679,9 @@ public class NetprotoController {
         List<PcapFile.Record> records = PcapFile.read(file.getBytes());
         String source = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
                 ? "import" : file.getOriginalFilename();
-        capture.reset();
+        session.reset();
         for (PcapFile.Record r : records) {
-            capture.inject(source, r.raw(), r.tsMillis());
+            session.inject(source, r.raw(), r.tsMillis());
         }
         return Map.of("imported", records.size());
     }

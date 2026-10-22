@@ -1,6 +1,6 @@
 # 如何测试你的协议
 
-> 模板仓库:`netproto-core/src/test/java/com/netproto/` 下的
+> 模板仓库(位于 `redesign/protocol-stack` 分支):`netproto-core/src/test/java/com/netproto/` 下的
 > `protocols/real/`(18 个真实协议族,权威字节向量)与 `core/Boundary*Test`(格式边界电池)。
 > 这份文档就是它们的方法论。
 

@@ -120,7 +120,14 @@ function annoAt(idx: number): Anno | null {
   return best
 }
 
-interface Tile { idx: number; hex: string; color: string | null; title: string }
+interface Tile {
+  idx: number
+  hex: string
+  color: string | null
+  title: string
+  /** 位字节瓦片平移到其在位框行的 x 位置(其余紧排,仅这一个对齐动作)。 */
+  ml: number
+}
 
 /** 位框组:同一字段的连续位一组,组下直接标字段名;无归属位为保留组(无标注)。 */
 interface BitGroup { key: string; a: Anno | null; boxes: string[] }
@@ -190,17 +197,25 @@ const segments = computed<Seg[]>(() => {
         hex: packet.hex.substr(idx * 2, 2).toUpperCase(),
         color: span?.color ?? null,
         title: fa ? `0x${idx.toString(16).padStart(4, '0')} · ${fa.label} = ${fa.full}` : `0x${idx.toString(16).padStart(4, '0')}`,
+        ml: 0,
       })
     }
     // 位框组行:位按归属字段分组(组下标字段名),无归属位为保留组;
-    // 连续有亚字节位的字节合成一行,组间留缝、可换行;跨字节字段归同一组
+    // 连续有亚字节位的字节合成一行,组间留缝、可换行;跨字节字段归同一组。
+    // 同时模拟位框流几何(框宽 14 + 缝 2,组间缝 14),记录每个位字节
+    // 在位框行的起始 x —— 供瓦片平移对齐用
     const brows: BitGroup[][] = []
     let run: BitGroup[] = []
     let byKey = new Map<string, BitGroup>()
+    const byteX = new Map<number, number>()
+    let nextX = 0
+    let curGrp: BitGroup | null = null
     for (let b = start; b < start + shown; b++) {
       const hits = sub.filter(a => a.bs! < b * 8 + 8 && b * 8 < a.be!)
       if (!hits.length) {
         if (run.length) { brows.push(run); run = []; byKey = new Map() }
+        nextX = 0
+        curGrp = null
         continue
       }
       const val = parseInt(packet.hex.substr(b * 2, 2), 16)
@@ -209,25 +224,41 @@ const segments = computed<Seg[]>(() => {
         const g = b * 8 + k
         const owner = hits.find(a => a.bs! <= g && g < a.be!)
         const ch = String((val >> (7 - k)) & 1)
+        let grp: BitGroup
         if (owner) {
           reserved = null
-          let grp = byKey.get(owner.key)
+          grp = byKey.get(owner.key)!
           if (!grp) {
             grp = { key: owner.key, a: owner, boxes: [] }
             byKey.set(owner.key, grp)
             run.push(grp)
           }
-          grp.boxes.push(ch)
         } else {
           if (!reserved) {
             reserved = { key: `r${b}:${k}`, a: null, boxes: [] }
             run.push(reserved)
           }
-          reserved.boxes.push(ch)
+          grp = reserved
         }
+        if (grp !== curGrp) {
+          if (curGrp) nextX += 12          // 组间缝 14 抵同组框缝 2 的差
+          curGrp = grp
+        }
+        if (k === 0) byteX.set(b, nextX)   // 本字节首位的 x
+        grp.boxes.push(ch)
+        nextX += 16
       }
     }
     if (run.length) brows.push(run)
+    // 瓦片平移:位字节的瓦片移到自己在位框行的 x 位置(其余瓦片保持紧排;
+    // 只对齐,不改任何其他样式)。40 = 瓦片 38 + 缝 2(已含在前缀累计里)
+    let acc = 0
+    for (const t of tiles) {
+      const tx = byteX.get(t.idx)
+      const ml = tx !== undefined && tx > acc ? tx - acc : 0
+      t.ml = ml
+      acc += 40 + ml
+    }
     // LIST 字段:收集元素(字节区间取元素级 ranges,内部字段取元素对象属性)
     let list: Seg['list'] | undefined
     for (const a of members) {
@@ -327,7 +358,7 @@ async function copyField(a: Anno) {
         <div class="tiles">
           <div v-for="t in s.tiles" :key="t.idx" class="tile"
                :class="{ dim: !t.color, lit: tileLit(t.idx) }"
-               :style="t.color ? { '--sc': t.color } : undefined"
+               :style="{ ...(t.color ? { '--sc': t.color } : {}), marginLeft: t.ml ? t.ml + 'px' : undefined }"
                :title="t.title"
                @mouseenter="hoverByte = t.idx"
                @mouseleave="hoverByte = null"
@@ -416,6 +447,7 @@ async function copyField(a: Anno) {
 .tiles { display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%; }
 .tile {
   --sc: #3d444d;
+  box-sizing: border-box;   /* shadow DOM 无全局 border-box,显式声明保证几何与瓦片行模型一致 */
   position: relative;
   width: 38px; height: 38px;
   display: flex; align-items: center; justify-content: center;
@@ -453,6 +485,7 @@ async function copyField(a: Anno) {
 .bgroup:not(.res) { cursor: pointer; }
 .bgroup .boxes { display: flex; gap: 2px; }
 .boxes i {
+  box-sizing: border-box;   /* 同上:位框实际宽恒 14px,位距模型(14+2=16)在两种环境一致 */
   flex: 0 0 auto;
   width: 14px;
   font-style: normal; font-size: 9px; line-height: 15px; text-align: center;

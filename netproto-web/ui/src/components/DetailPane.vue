@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, h, nextTick, ref, watch } from 'vue'
-import { NButton, NTag, NTree, useMessage } from 'naive-ui'
-import { Check, Copy, X } from 'lucide-vue-next'
+import { NButton, NModal, NTag, NTree, useMessage } from 'naive-ui'
+import { Check, Copy, LayoutGrid, X } from 'lucide-vue-next'
 import { closeDetail, store } from '../store'
 import { copyText, fmtValue, layerColor, layerSummary } from '../utils/format'
 import type { FieldMeta, FlagMeta, LayerView } from '../types'
 import HexView from './HexView.vue'
+import FieldMapView from './FieldMapView.vue'
 
 const message = useMessage()
 /** 当前帧完整详情:选中时按需从 /packet/{seq} 拉取(摘要不常驻协议树)。 */
 const packet = computed(() => store.detail)
 const paneRef = ref<HTMLElement | null>(null)
+/** 字段图弹窗(字节瓦片 + 字段标注的整帧视图)。 */
+const fieldMapOpen = ref(false)
 
 const selectedKeys = ref<string[]>([])
 
@@ -557,6 +560,9 @@ watch(packet, p => {
         {{ l.id.toUpperCase() }}
       </n-tag>
       <span class="meta num">{{ packet.len }} B · {{ new Date(packet.ts).toLocaleTimeString() }}</span>
+      <button class="close" title="字段图(字节瓦片 + 字段标注)" @click="fieldMapOpen = true">
+        <LayoutGrid :size="14" />
+      </button>
       <button class="close" title="关闭" @click="closeDetail"><X :size="14" /></button>
     </header>
 
@@ -584,6 +590,19 @@ watch(packet, p => {
         </div>
       </div>
     </div>
+
+    <!-- 字段图:整帧字节瓦片 + 字段虚线标注(截图式信令解析视图) -->
+    <n-modal v-model:show="fieldMapOpen" preset="card"
+             :title="`帧 #${packet.seq} · 字段图`" style="width: min(1040px, 94vw)">
+      <div class="fmap-body">
+        <FieldMapView :packet="packet" :protocols="store.protocols" />
+      </div>
+      <template #footer>
+        <div class="fmap-foot">
+          <n-button size="small" @click="fieldMapOpen = false">关闭</n-button>
+        </div>
+      </template>
+    </n-modal>
   </section>
 </template>
 
@@ -606,6 +625,8 @@ watch(packet, p => {
   color: #6e7681; padding: 3px; border-radius: 4px; display: flex;
 }
 .close:hover { color: #c9d1d9; background: rgba(177, 186, 196, .1); }
+.fmap-body :deep(.fm) { max-height: 66vh; }
+.fmap-foot { display: flex; justify-content: center; }
 .pane-body { flex: 1; min-height: 0; display: flex; padding: 0 12px 10px; }
 .tree-side {
   flex: 1; min-width: 0; overflow: auto;

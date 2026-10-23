@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build && vite build -c vite.fieldmap.config.ts"
   },
   "dependencies": {
     "lucide-vue-next": "^1.0.0",

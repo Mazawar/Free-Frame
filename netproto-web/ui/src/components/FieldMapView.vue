@@ -443,41 +443,50 @@ async function copyField(a: Anno) {
 }
 
 /* 位框组行:同一字段的位一组,组名行内联「字段名 + 解码值」(释义);
-   组名可宽过位框把分段撑开;组间留缝、可换行 */
-.brow { display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 100%; }
+   位框统一固定宽度,组释义前带竖线(与名值行一致),说明长可撑开;
+   组释义之间的间隔 = 一个位框宽 */
+.brow { display: flex; flex-wrap: wrap; gap: 4px 14px; max-width: 100%; }
 .bgroup {
   display: flex; flex-direction: column; gap: 2px;
-  width: max-content; max-width: 220px; min-width: 0;
+  width: max-content; min-width: 0;
 }
 .bgroup:not(.res) { cursor: pointer; }
-.bgroup .boxes { display: flex; gap: 1px; width: 100%; }
+.bgroup .boxes { display: flex; gap: 2px; }
 .boxes i {
-  flex: 1; min-width: 0;
-  width: 13px;
+  flex: 0 0 auto;
+  width: 14px;
   font-style: normal; font-size: 9px; line-height: 15px; text-align: center;
   color: #6e7681;
-  background: rgba(177, 186, 196, .06);
+  background: rgba(177, 186, 196, .05);
   border: 1px solid #21262d;
   border-radius: 2px;
 }
 .bgroup:not(.res) .boxes i {
   --fc: #8b949e;
-  color: #f0f6fc; font-weight: 700;
-  background: color-mix(in srgb, var(--fc) 42%, transparent);
-  border-color: color-mix(in srgb, var(--fc) 60%, transparent);
+  color: var(--fc); font-weight: 700;
+  background: color-mix(in srgb, var(--fc) 13%, transparent);
+  border-color: color-mix(in srgb, var(--fc) 78%, transparent);
+  text-shadow:
+    0 0 5px var(--fc),
+    0 0 2px color-mix(in srgb, var(--fc) 80%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--fc) 38%, transparent);
 }
 .bgroup.lit .boxes i,
-.bgroup:hover .boxes i { filter: brightness(1.6); }
+.bgroup:hover .boxes i { filter: brightness(1.5); }
 .gcap {
   display: flex; align-items: baseline; gap: 5px;
-  max-width: 100%;
-  overflow: hidden; white-space: nowrap;
+  padding-left: 6px;
+  border-left: 2px solid color-mix(in srgb, var(--fc, #8b949e) 55%, transparent);
+  white-space: nowrap;
 }
 .gname {
   font-size: 8.5px; color: var(--fc); letter-spacing: .2px;
-  overflow: hidden; text-overflow: ellipsis;
 }
-.gval { font-size: 10.5px; font-weight: 700; color: #e6edf3; flex-shrink: 0; }
+.gval {
+  font-size: 10.5px; font-weight: 700; flex-shrink: 0;
+  color: color-mix(in srgb, var(--fc) 30%, #fff);
+  text-shadow: 0 0 4px color-mix(in srgb, var(--fc) 70%, transparent);
+}
 .bgroup.lit .gname,
 .bgroup:hover .gname { color: #c9d1d9; }
 

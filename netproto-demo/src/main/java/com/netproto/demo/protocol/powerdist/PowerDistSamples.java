@@ -18,6 +18,9 @@ public final class PowerDistSamples {
 
     private final StackEncoder encoder;
 
+    /** 遥测量扰动源(statusReport 每次注入值不同,信号视图才有变化的曲线)。 */
+    private final java.util.Random rnd = new java.util.Random();
+
     public PowerDistSamples(StackEncoder encoder) {
         this.encoder = encoder;
     }
@@ -37,11 +40,15 @@ public final class PowerDistSamples {
         return encoder.encode(List.of(eth(), ipv4(), udp(PD_PORT), h, new PdRegisterGrant()));
     }
 
-    /** 终端状态上报(信令 0x21,携带许可后的令牌)。 */
+    /** 终端状态上报(信令 0x21,携带许可后的令牌)。遥测量带随机扰动,
+     *  反复注入可见信号视图曲线变化(电压 240~260V / 电流 8~12A / 温度 24~32℃ / 状态 0~2)。 */
     public byte[] statusReport() {
         PdFrame h = header(0x0002, 0xABCD);
         PdStatusReport r = new PdStatusReport();
-        r.setRunStatus(1);                      // 告警态
+        r.setVoltage(2400 + rnd.nextInt(201));
+        r.setCurrent(80 + rnd.nextInt(41));
+        r.setTemp(24 + rnd.nextInt(9));
+        r.setRunStatus(rnd.nextInt(3));
         return encoder.encode(List.of(eth(), ipv4(), udp(51888), h, r));
     }
 

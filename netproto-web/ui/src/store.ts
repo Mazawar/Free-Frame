@@ -25,6 +25,8 @@ export const store = reactive({
   detail: null as Packet | null,    // 选中帧完整详情(按需拉取)
   sse: 'connecting' as 'connecting' | 'open' | 'closed',
   sendOpen: false,
+  signalOpen: false,
+  trafficOpen: false,
   /** 初始恢复(环形缓冲最近帧)完成;之前不挂载虚拟表格,避免布局未稳时测高失败 */
   bootstrapped: false,
   /** 后端运行配置(只读):显示参数以它为准 */

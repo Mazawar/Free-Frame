@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NInput, NSelect, NTooltip, useMessage } from 'naive-ui'
-import { Download, Play, SendHorizontal, Square, Trash2, Upload } from 'lucide-vue-next'
+import { NButton, NSelect, NTooltip, useMessage } from 'naive-ui'
+import { Download, Play, SendHorizontal, Square, Trash2, Upload, Activity, TrendingUp } from 'lucide-vue-next'
 import { api } from '../api'
 import { clearPackets, connectStream, refreshStatus, store } from '../store'
+import BpfInput from './BpfInput.vue'
 
 const message = useMessage()
 const switching = ref(false)
@@ -95,8 +96,7 @@ async function onImportFile(e: Event) {
         <n-select v-model:value="store.iface" :options="ifaceOptions" filterable
                   :disabled="store.captureRunning"
                   placeholder="选择网卡" size="small" class="iface" />
-        <n-input v-model:value="store.bpf" size="small" class="bpf"
-                 placeholder="BPF 过滤" spellcheck="false" />
+        <BpfInput v-model:value="store.bpf" class="bpf" />
         <n-button size="small" type="primary" :disabled="store.captureRunning || !store.iface"
                   :loading="switching" @click="start">
           <template #icon><Play :size="13" /></template>
@@ -115,6 +115,14 @@ async function onImportFile(e: Event) {
     <div class="zone right">
       <!-- 工具组:后续新功能(设置/显示选项等)在此区追加 -->
       <div class="group">
+        <n-button size="small" secondary @click="store.trafficOpen = true">
+          <template #icon><TrendingUp :size="13" /></template>
+          流量
+        </n-button>
+        <n-button size="small" secondary @click="store.signalOpen = true">
+          <template #icon><Activity :size="13" /></template>
+          信号
+        </n-button>
         <n-button size="small" secondary @click="store.sendOpen = true">
           <template #icon><SendHorizontal :size="13" /></template>
           发包
@@ -176,7 +184,9 @@ async function onImportFile(e: Event) {
 .name { font-weight: 600; font-size: 13px; letter-spacing: .2px; color: #e6edf3; }
 
 .iface { width: 250px; }
-.bpf { width: 170px; }
+/* 聚焦时加宽:长 BPF 表达式编辑时可见更多内容(下拉恒 340px 与加宽后对齐) */
+.bpf { width: 200px; transition: width .18s ease; }
+.bpf:focus-within { width: 340px; }
 .capture-state {
   display: inline-flex; align-items: center; gap: 5px;
   margin-left: 4px; font-size: 12px; color: #8b949e; white-space: nowrap;

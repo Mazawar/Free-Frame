@@ -86,3 +86,46 @@ export interface Iface {
   name: string
   description: string
 }
+
+/** 信号视图:一帧一采样点(v = 字段解码值),ts 毫秒时间戳。 */
+export interface SignalPoint {
+  seq: number
+  ts: number
+  v: number
+}
+
+export interface SignalSeries {
+  kind: 'analog' | 'digital'
+  points: SignalPoint[]
+}
+
+/** 流量分析:会话(方向无关端点对,字节降序)。 */
+export interface TrafficConversation {
+  key: string
+  srcHost: string
+  dstHost: string
+  srcPort: number | null
+  dstPort: number | null
+  withPorts: boolean
+  frames: number
+  bytes: number
+  first: number
+  last: number
+  rateBps: number
+  proto: string
+  protoName: string
+}
+
+export interface TrafficProtocol {
+  id: string
+  name: string
+  frames: number
+  bytes: number
+}
+
+export interface Traffic {
+  window: { frames: number; bytes: number; from: number; to: number }
+  conversations: TrafficConversation[]
+  protocols: TrafficProtocol[]
+  timeline: { bucketMs: number; buckets: { t0: number; frames: number; bytes: number }[] }
+}

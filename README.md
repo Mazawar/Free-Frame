@@ -13,7 +13,7 @@
 ![JDK](https://img.shields.io/badge/JDK-25-blue)
 ![Maven](https://img.shields.io/badge/Maven-3.9%2B-blue)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green)
-![Tests](https://img.shields.io/badge/tests-260%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-268%20passing-brightgreen)
 
 </div>
 
@@ -158,7 +158,12 @@ netproto:
 ## 观测台与 REST / SSE API
 
 观测台(`http://localhost:8848/netproto/`):实时帧表格、点击帧看层级字段树 + hex/ASCII 选区联动、
-按协议/多级分组过滤、分层发包面板(字段表单,长度/校验和/选择子自动)、pcap 导入导出。
+字段图(整帧字节瓦片 + 字段标注的帧解构图)、
+按协议/多级分组过滤、分层发包面板(字段表单,长度/校验和/选择子自动)、pcap 导入导出、
+信号视图(帧内字段按时间抽成遥测曲线 / 遥信方波)、
+流量分析(会话统计 + 协议分布 + 吞吐时间线,点会话追踪该流全部帧)。
+BPF 过滤框带智能提示:文法联想(pcap-filter 语法)、协议配方(从注册表推导,如 `udp port 9000`)、
+实时校验(libpcap 编译裁决,红=语法错误+原文,绿=可用)。
 前端源码在 `netproto-web/ui`(Vite,`npm run dev` 热更新)。
 
 **帧详情** —— 左侧协议分组过滤,中部实时帧表格,选中帧展示层级字段树与 hex/ASCII
@@ -166,16 +171,42 @@ netproto:
 
 ![观测台帧详情与 hex 选区](docs/images/observatory-detail.png)
 
+**字段图** —— 帧的解构图:整帧字节瓦片 + 字段分段标注,亚字节字段逐位展开
+(位框与瓦片严格 8bit 对齐),支持 LIST 元素展开,悬停互亮、点击复制:
+(截图帧:Eth ▸ IPv4 ▸ TCP,可见 Version/Header Length/Flags 位拆与 TCP 标志位)
+
+![字段图(帧解构)](docs/images/fieldmap-view.png)
+
 **分层发包** —— 选目标协议自动推导整条协议链,分层表单带格式徽标(`MAC·6B` / `IP·4B` /
 `dec·2B`),长度/校验和/选择子自动,可切 JSON 高级模式:
 
 ![分层发包面板](docs/images/observatory-send-dialog.png)
+
+**BPF 智能提示** —— 文法联想 + 协议配方(注册表推导,如 `udp port 9000`),输入即校验,
+裁决来自 libpcap(与抓包同一编译器:通过=可用,红=语法错误原文):
+
+![BPF 智能提示](docs/images/bpf-hints.png)
+
+**信号视图** —— 帧内字段按时间抽成序列:模拟量(遥测)曲线 + 数字量(遥信)方波泳道,
+A/D 可切换,开窗自动刷新:
+
+![信号视图](docs/images/signal-view.png)
+
+**流量分析** —— 会话统计(方向无关端点对)、协议分布、吞吐时间线(帧/s 与 KB/s 双轴),
+点会话追踪该流全部帧,点帧跳回主表:
+
+![流量分析](docs/images/traffic-view.png)
 
 ```
 GET  /api/netproto/config             # 运行配置只读视图
 GET  /api/netproto/protocols          # 注册协议 + 字段元数据(id/name/groupPath/category/fields)
 GET  /api/netproto/template?path=     # 按分派树推导协议链,生成发包模板
 GET  /api/netproto/interfaces         # 网卡列表
+GET  /api/netproto/bpf/validate?expr=   # BPF 离线校验(libpcap 编译,与抓包同源:通过=可用)
+GET  /api/netproto/bpf/hints            # BPF 提示素材(协议配方 + 本机地址,输入框智能提示用)
+GET  /api/netproto/sessions/{id}/signals?proto=&field=&limit=   # 信号视图时间序列(帧内字段值,旧→新)
+GET  /api/netproto/sessions/{id}/traffic?limit=      # 流量分析:会话/协议分布/吞吐时间线(纯摘要聚合)
+GET  /api/netproto/sessions/{id}/traffic/frames?src=&dst=&srcPort=&dstPort=   # 流量追踪:端点对双向帧
 POST /api/netproto/capture/start      # {iface, bpf?}
 POST /api/netproto/capture/stop
 GET  /api/netproto/capture/status
@@ -239,7 +270,7 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ## 测试
 
 ```bash
-mvn test        # 260 个测试(core 216 / web 21 / demo 23)
+mvn test        # 268 个测试(core 216 / web 26 / demo 26)
 ```
 
 测试方法论(权威向量、校验和三方自证、畸形输入兜底)见

@@ -464,15 +464,14 @@ async function copyField(a: Anno) {
 .bgroup:not(.res) .boxes i {
   --fc: #8b949e;
   color: var(--fc); font-weight: 700;
-  background: color-mix(in srgb, var(--fc) 13%, transparent);
-  border-color: color-mix(in srgb, var(--fc) 78%, transparent);
-  text-shadow:
-    0 0 5px var(--fc),
-    0 0 2px color-mix(in srgb, var(--fc) 80%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--fc) 38%, transparent);
+  background: color-mix(in srgb, var(--fc) 20%, transparent);
+  border-color: color-mix(in srgb, var(--fc) 85%, transparent);
 }
 .bgroup.lit .boxes i,
-.bgroup:hover .boxes i { filter: brightness(1.5); }
+.bgroup:hover .boxes i {
+  background: color-mix(in srgb, var(--fc) 32%, transparent);
+  border-color: var(--fc);
+}
 .gcap {
   display: flex; align-items: baseline; gap: 5px;
   padding-left: 6px;
@@ -484,8 +483,7 @@ async function copyField(a: Anno) {
 }
 .gval {
   font-size: 10.5px; font-weight: 700; flex-shrink: 0;
-  color: color-mix(in srgb, var(--fc) 30%, #fff);
-  text-shadow: 0 0 4px color-mix(in srgb, var(--fc) 70%, transparent);
+  color: #e6edf3;
 }
 .bgroup.lit .gname,
 .bgroup:hover .gname { color: #c9d1d9; }

@@ -6,6 +6,8 @@ import ProtocolSidebar from './components/ProtocolSidebar.vue'
 import PacketTable from './components/PacketTable.vue'
 import DetailPane from './components/DetailPane.vue'
 import SendDialog from './components/SendDialog.vue'
+import SignalView from './components/SignalView.vue'
+import TrafficView from './components/TrafficView.vue'
 import StatusBar from './components/StatusBar.vue'
 import { api } from './api'
 import { addPackets, connectStream, refreshInterfaces, refreshProtocols, restoreSession, store } from './store'
@@ -120,6 +122,8 @@ function onContextMenu(e: MouseEvent) {
         <StatusBar />
       </div>
       <SendDialog />
+      <SignalView />
+      <TrafficView />
     </n-message-provider>
   </n-config-provider>
 </template>

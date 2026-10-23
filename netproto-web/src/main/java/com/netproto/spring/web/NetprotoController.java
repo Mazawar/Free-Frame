@@ -3,6 +3,7 @@ package com.netproto.spring.web;
 import com.netproto.annotation.Payload;
 import com.netproto.annotation.Protocol;
 import com.netproto.annotation.ProtocolField;
+import com.netproto.spring.capture.BpfValidator;
 import com.netproto.spring.capture.CaptureSession;
 import com.netproto.spring.capture.FrameSummary;
 import com.netproto.spring.capture.NetIfaces;
@@ -53,15 +54,18 @@ public class NetprotoController {
     private final StackEncoder encoder;
     private final ObjectMapper objectMapper;
     private final com.netproto.spring.config.NetprotoProperties props;
+    private final BpfValidator bpf;
 
     public NetprotoController(ProtocolRegistry registry, SessionManager sessions, RawSender sender,
                               StackEncoder encoder, ApplicationContext appContext,
-                              com.netproto.spring.config.NetprotoProperties props) {
+                              com.netproto.spring.config.NetprotoProperties props,
+                              BpfValidator bpf) {
         this.registry = registry;
         this.sessions = sessions;
         this.sender = sender;
         this.encoder = encoder;
         this.props = props;
+        this.bpf = bpf;
         this.objectMapper = appContext.getBeanProvider(ObjectMapper.class).getIfAvailable(ObjectMapper::new);
     }
 
@@ -333,6 +337,59 @@ public class NetprotoController {
         return fields;
     }
 
+    // ---- BPF 智能提示/校验(前端出文法字典与配方,裁决永远交给 libpcap) ----
+
+    /** 表达式长度上限:单次编译本就微秒级,纯防误用本端点作压力入口。 */
+    private static final int MAX_BPF_CHARS = 2048;
+
+    /** 离线校验:死句柄 pcap_compile,与真实抓包同一编译器 —— 「通过=可用」,
+     *  错误信息即 libpcap 原文(如 "syntax error in filter expression")。 */
+    @GetMapping("/bpf/validate")
+    public Map<String, Object> bpfValidate(@RequestParam String expr) {
+        if (expr.length() > MAX_BPF_CHARS) {
+            throw new IllegalArgumentException("bpf expression too long: " + expr.length()
+                    + " chars (max " + MAX_BPF_CHARS + ")");
+        }
+        BpfValidator.Result r = bpf.validate(expr);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", r.ok());
+        if (r.error() != null) {
+            m.put("error", r.error());
+        }
+        return m;
+    }
+
+    /** 提示素材:协议配方(注册表 @BindOn 推导,如 `udp port 9000`)+ 本机地址(host 值联想)。 */
+    @GetMapping("/bpf/hints")
+    public Map<String, Object> bpfHints() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("recipes", BpfRecipes.from(registry));
+        m.put("localAddresses", localAddresses());
+        return m;
+    }
+
+    /** 本机非环回/非链路本地的 IPv4(去重;取不到原生网卡时返回空,联想降级)。 */
+    private static List<Map<String, String>> localAddresses() {
+        Map<String, Map<String, String>> byIp = new LinkedHashMap<>();
+        try {
+            for (var nif : NetIfaces.list()) {
+                for (var addr : nif.getAddresses()) {
+                    java.net.InetAddress a = addr.getAddress();
+                    if (!(a instanceof java.net.Inet4Address) || a.isLoopbackAddress()
+                            || a.isLinkLocalAddress()) {
+                        continue;
+                    }
+                    byIp.putIfAbsent(a.getHostAddress(), Map.of(
+                            "ip", a.getHostAddress(),
+                            "iface", nif.getDescription() == null ? nif.getName() : nif.getDescription()));
+                }
+            }
+        } catch (org.pcap4j.core.PcapNativeException ex) {
+            // 原生库不可用等:host 值联想降级为空,不影响其余功能
+        }
+        return new ArrayList<>(byIp.values());
+    }
+
     // ---- 采集:旧端点(全部落在 default 会话上,路径/入参/返回结构不变,前端零改动) ----
 
     @GetMapping("/interfaces")
@@ -496,6 +553,115 @@ public class NetprotoController {
         return importPcap(sessionOr404(id), file);
     }
 
+    // ---- 信号视图(遥测曲线/遥信方波):环形缓冲 → 按协议字段重解码成时间序列 ----
+
+    /** 单信号取点上限:每点一次整栈重解码,封顶防全环扫描的极端开销。 */
+    private static final int MAX_SIGNAL_POINTS = 5000;
+
+    /** 单信号时间序列:过滤出含该协议层的帧,取字段解码值(旧→新)。
+     *  1bit 字段判 digital(遥信方波),其余数值 analog(遥测曲线);presentIf 缺席的帧跳过
+     *  (缺席字段的 POJO 里是 Java 默认值,画出来是假值)。 */
+    @GetMapping("/sessions/{id}/signals")
+    public Map<String, Object> sessionSignals(@PathVariable String id,
+                                              @RequestParam String proto,
+                                              @RequestParam String field,
+                                              @RequestParam(defaultValue = "1000") int limit) throws Exception {
+        CaptureSession session = sessionOr404(id);
+        ProtocolRegistry.Entry e = registry.get(proto);
+        if (e == null) {
+            throw new IllegalArgumentException("unknown protocol: " + proto);
+        }
+        Field f = null;
+        for (Field x : e.type().getDeclaredFields()) {
+            if (x.getName().equals(field)) {
+                f = x;
+                break;
+            }
+        }
+        if (f == null) {
+            throw new IllegalArgumentException("unknown field '" + field + "' on protocol " + proto);
+        }
+        ProtocolField ann = f.getAnnotation(ProtocolField.class);
+        f.setAccessible(true);
+        int cap = Math.min(Math.max(limit, 1), MAX_SIGNAL_POINTS);
+        List<FrameSummary> newest = session.recent(cap);   // 新→旧
+        List<Map<String, Object>> points = new ArrayList<>();
+        for (int i = newest.size() - 1; i >= 0; i--) {
+            FrameSummary sum = newest.get(i);
+            if (!sum.layerIds().contains(proto)) {
+                continue;
+            }
+            DecodedPacket p = session.detail(sum.seq());
+            if (p == null) {
+                continue;
+            }
+            for (DecodedPacket.DecodedLayer l : p.layers()) {
+                if (!l.id().equals(proto) || !l.fieldRanges().containsKey(field)) {
+                    continue;
+                }
+                Object v = f.get(l.packet());
+                Double d = v instanceof Number n ? n.doubleValue()
+                        : v instanceof Boolean b ? (b ? 1d : 0d) : null;
+                if (d == null) {
+                    throw new IllegalArgumentException(
+                            "field '" + field + "' is not a numeric/boolean field");
+                }
+                Map<String, Object> pt = new LinkedHashMap<>();
+                pt.put("seq", sum.seq());
+                pt.put("ts", sum.ts());
+                pt.put("v", d);
+                points.add(pt);
+                break;
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("kind", ann != null && ann.size() == 1 ? "digital" : "analog");
+        out.put("points", points);
+        return out;
+    }
+
+    // ---- 流量分析/追踪:纯摘要聚合(会话/协议/吞吐)+ 会话帧追溯 ----
+
+    /** 流量统计扫描帧数上限(每帧仅摘要聚合,毫秒级)。 */
+    private static final int MAX_TRAFFIC_FRAMES = 100_000;
+
+    /** 流量分析:会话表(方向无关端点对,字节降序)+ 协议分布 + 吞吐时间线。 */
+    @GetMapping("/sessions/{id}/traffic")
+    public Map<String, Object> sessionTraffic(@PathVariable String id,
+                                              @RequestParam(defaultValue = "20000") int limit) {
+        CaptureSession session = sessionOr404(id);
+        int cap = Math.min(Math.max(limit, 1), MAX_TRAFFIC_FRAMES);
+        List<FrameSummary> newest = session.recent(cap);   // 新→旧 → 反转为旧→新
+        List<FrameSummary> frames = new ArrayList<>(newest);
+        Collections.reverse(frames);
+        return TrafficStats.of(frames, registry);
+    }
+
+    /** 流量追踪:某端点对(双向)的全部帧摘要,旧→新 —— 会话表行点击后的帧追溯。 */
+    @GetMapping("/sessions/{id}/traffic/frames")
+    public List<Map<String, Object>> sessionTrafficFrames(@PathVariable String id,
+                                                          @RequestParam String src,
+                                                          @RequestParam String dst,
+                                                          @RequestParam(required = false) Integer srcPort,
+                                                          @RequestParam(required = false) Integer dstPort,
+                                                          @RequestParam(defaultValue = "500") int limit) {
+        CaptureSession session = sessionOr404(id);
+        int cap = Math.min(Math.max(limit, 1), 2000);
+        List<FrameSummary> newest = session.recent(cap);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (int i = newest.size() - 1; i >= 0; i--) {
+            FrameSummary f = newest.get(i);
+            boolean fwd = f.src().equals(src) && f.dst().equals(dst)
+                    && Objects.equals(f.srcPort(), srcPort) && Objects.equals(f.dstPort(), dstPort);
+            boolean rev = f.src().equals(dst) && f.dst().equals(src)
+                    && Objects.equals(f.srcPort(), dstPort) && Objects.equals(f.dstPort(), srcPort);
+            if (fwd || rev) {
+                out.add(row(f));
+            }
+        }
+        return out;
+    }
+
     private CaptureSession sessionOr404(String id) {
         CaptureSession s = sessions.get(id);
         if (s == null) {
@@ -515,21 +681,25 @@ public class NetprotoController {
     private static List<Map<String, Object>> packetRows(CaptureSession session, int limit) {
         List<Map<String, Object>> out = new ArrayList<>();
         for (FrameSummary s : session.recent(limit)) {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("seq", s.seq());
-            m.put("ts", s.ts());
-            m.put("iface", s.iface());
-            m.put("len", s.len());
-            m.put("path", s.path());
-            m.put("layerIds", s.layerIds());
-            m.put("src", s.src());
-            m.put("dst", s.dst());
-            m.put("srcPort", s.srcPort());
-            m.put("dstPort", s.dstPort());
-            m.put("info", s.info());
-            out.add(m);
+            out.add(row(s));
         }
         return out;
+    }
+
+    private static Map<String, Object> row(FrameSummary s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("seq", s.seq());
+        m.put("ts", s.ts());
+        m.put("iface", s.iface());
+        m.put("len", s.len());
+        m.put("path", s.path());
+        m.put("layerIds", s.layerIds());
+        m.put("src", s.src());
+        m.put("dst", s.dst());
+        m.put("srcPort", s.srcPort());
+        m.put("dstPort", s.dstPort());
+        m.put("info", s.info());
+        return m;
     }
 
     private ResponseEntity<Map<String, Object>> packetDetail(CaptureSession session, long seq) {

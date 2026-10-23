@@ -68,13 +68,20 @@ public class NetprotoAutoConfiguration {
     }
 
     @Bean
+    public com.netproto.spring.capture.BpfValidator bpfValidator() {
+        return new com.netproto.spring.capture.BpfValidator();
+    }
+
+    @Bean
     public NetprotoController netprotoController(ProtocolRegistry registry,
                                                  SessionManager sessionManager,
                                                  RawSender rawSender,
                                                  StackEncoder stackEncoder,
                                                  NetprotoProperties props,
+                                                 com.netproto.spring.capture.BpfValidator bpfValidator,
                                                  org.springframework.context.ApplicationContext appContext) {
-        return new NetprotoController(registry, sessionManager, rawSender, stackEncoder, appContext, props);
+        return new NetprotoController(registry, sessionManager, rawSender, stackEncoder, appContext,
+                props, bpfValidator);
     }
 
     /**

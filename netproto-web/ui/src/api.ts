@@ -1,4 +1,5 @@
-import type { Iface, Packet, PacketSummary, ProtocolMeta } from './types'
+import type { Iface, Packet, PacketSummary, ProtocolMeta, SignalSeries, Traffic } from './types'
+import type { HintData } from './utils/bpf'
 
 /** API 错误:message 取后端 body 的 message/error,并附 status 供调用方区分 404(会话已不存在)等。 */
 async function json<T>(resp: Response): Promise<T> {
@@ -61,4 +62,31 @@ export const api = {
   template: (path: string) =>
     fetch(`/api/netproto/template?path=${encodeURIComponent(path)}`)
       .then(r => json<{ layers: { protocol: string; fields: Record<string, unknown> }[] }>(r)),
+
+  // ---- BPF 智能提示(校验结论 = libpcap 编译,与抓包同源) ----
+
+  bpfValidate: (expr: string) =>
+    fetch(`/api/netproto/bpf/validate?expr=${encodeURIComponent(expr)}`)
+      .then(r => json<{ ok: boolean; error?: string }>(r)),
+  bpfHints: () =>
+    fetch('/api/netproto/bpf/hints').then(r => json<HintData>(r)),
+
+  /** 信号视图:某协议某字段在会话环形缓冲里的时间序列(旧→新)。 */
+  sessionSignals: (id: string, proto: string, field: string, limit = 1000) =>
+    fetch(`/api/netproto/sessions/${id}/signals?proto=${encodeURIComponent(proto)}`
+      + `&field=${encodeURIComponent(field)}&limit=${limit}`)
+      .then(r => json<SignalSeries>(r)),
+
+  /** 流量分析:会话/协议分布/吞吐时间线(纯摘要聚合)。 */
+  sessionTraffic: (id: string, limit = 20000) =>
+    fetch(`/api/netproto/sessions/${id}/traffic?limit=${limit}`).then(r => json<Traffic>(r)),
+  /** 流量追踪:某端点对(双向)的全部帧摘要(旧→新)。 */
+  sessionTrafficFrames: (id: string, ep: {
+    srcHost: string; dstHost: string; srcPort: number | null; dstPort: number | null
+  }, limit = 500) => {
+    const q = new URLSearchParams({ src: ep.srcHost, dst: ep.dstHost, limit: String(limit) })
+    if (ep.srcPort != null) q.set('srcPort', String(ep.srcPort))
+    if (ep.dstPort != null) q.set('dstPort', String(ep.dstPort))
+    return fetch(`/api/netproto/sessions/${id}/traffic/frames?${q}`).then(r => json<PacketSummary[]>(r))
+  },
 }

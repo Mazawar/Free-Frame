@@ -72,6 +72,17 @@ public class NetprotoAutoConfiguration {
         return new com.netproto.spring.capture.BpfValidator();
     }
 
+    /** API 令牌过滤器(netproto.auth-token 非空时启用;默认不拦截,demo 本机用法)。 */
+    @Bean
+    public org.springframework.boot.web.servlet.FilterRegistrationBean<com.netproto.spring.web.NetprotoAuthFilter>
+    netprotoAuthFilter(NetprotoProperties props) {
+        var reg = new org.springframework.boot.web.servlet.FilterRegistrationBean<>(
+                new com.netproto.spring.web.NetprotoAuthFilter(props));
+        reg.addUrlPatterns("/api/netproto/*");
+        reg.setOrder(org.springframework.core.Ordered.HIGHEST_PRECEDENCE + 10);
+        return reg;
+    }
+
     @Bean
     public NetprotoController netprotoController(ProtocolRegistry registry,
                                                  SessionManager sessionManager,

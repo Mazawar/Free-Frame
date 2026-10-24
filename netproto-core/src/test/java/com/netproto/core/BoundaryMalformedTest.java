@@ -109,13 +109,13 @@ class BoundaryMalformedTest {
 
     // ---- 测试 ----
 
-    /** 长度字段宣称 100,实际只有 4 字节 → 干净失败(修复:位/字节越界统一报"past end")。 */
+    /** 长度字段宣称 100,实际只有 4 字节 → 干净失败(长度钳制在读前拒绝:resolved size exceeds remaining)。 */
     @Test
     void lengthOvershootFailsNotCorrupts() {
         ProtocolCodec<LenOvershootFrame> codec = new ProtocolCodec<>(LenOvershootFrame.class);
         byte[] wire = new byte[]{0x00, 100, 0x11, 0x22, 0x33, 0x44};   // len=100, body 仅 4B
         RuntimeException ex = assertThrows(RuntimeException.class, () -> codec.deserialize(wire));
-        assertThat(ex.getCause()).hasMessageContaining("byte read past end");
+        assertThat(ex.getCause()).hasMessageContaining("exceeds remaining");
     }
 
     /** 计数字段宣称 100000,实际 1 个元素字节 → 快速失败(不挂死、不先分配大数组)。 */

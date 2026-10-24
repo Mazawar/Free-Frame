@@ -13,7 +13,7 @@
 ![JDK](https://img.shields.io/badge/JDK-25-blue)
 ![Maven](https://img.shields.io/badge/Maven-3.9%2B-blue)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green)
-![Tests](https://img.shields.io/badge/tests-268%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-284%20passing-brightgreen)
 
 </div>
 
@@ -270,7 +270,7 @@ byte[] out = encoder.encode(List.of(responseHeader, responsePdu));
 ## 测试
 
 ```bash
-mvn test        # 268 个测试(core 216 / web 26 / demo 26)
+mvn test        # 284 个测试(core 222 / web 30 / demo 32)
 ```
 
 测试方法论(权威向量、校验和三方自证、畸形输入兜底)见

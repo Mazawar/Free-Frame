@@ -1,5 +1,13 @@
 spring:
   application:
     name: demo
+  servlet:
+    multipart:
+      # 与后端 MAX_IMPORT_BYTES(64MB)对齐:容器默认 1MB 会先拒,让 64MB 上限真正可达
+      max-file-size: 64MB
+      max-request-size: 66MB
 server:
   port: 8848
+  # demo 定位本机使用;控制面无鉴权(抓包/发包/导出全开放),绑定回环避免成为局域网跳板。
+  # 需局域网访问时改回 0.0.0.0,并同时设置 netproto.auth-token。
+  address: 127.0.0.1

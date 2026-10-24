@@ -194,6 +194,36 @@ class SessionManagerTest {
     }
 
     @Test
+    void shutdownClosesAllSessions() throws Exception {
+        StackDecoder decoder = newDecoder();
+        var closed = new CopyOnWriteArrayList<String>();
+        SessionManager mgr = new SessionManager(decoder, 100, 64 * 1024, 65536, 4, 0) {
+            @Override
+            protected CaptureSession newSession(String id) {
+                // 测试桩:start 不碰真实网卡;close 记录调用(运行中关停 JVM 必须cleanup全部会话)
+                return new CaptureSession(id, decoder, 100, 64 * 1024, 65536) {
+                    @Override
+                    public void start(String iface, String bpf) {
+                        // no-op
+                    }
+                    @Override
+                    public void close() {
+                        closed.add(id);
+                        super.close();
+                    }
+                };
+            }
+        };
+        mgr.defaultSession();
+        mgr.create("lo", "");
+        mgr.shutdown();
+        assertTrue(closed.contains("default"), "shutdown 必须关停 default(否则非守护线程使 JVM 退不出)");
+        assertTrue(closed.contains("s1"));
+        assertNull(mgr.get("default"));
+        assertNull(mgr.get("s1"));
+    }
+
+    @Test
     void idleSessionsWithoutViewersAreReaped() throws Exception {
         StackDecoder decoder = newDecoder();
         // grace=200ms:手动调 sweepIdleSessions 验证回收规则(定时器也会跑,不影响断言)

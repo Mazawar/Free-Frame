@@ -49,11 +49,11 @@
 ## 五、兜底清单(修复后)
 | 畸形输入 | 现状 | 评价 |
 |---|---|---|
-| 长度/计数超卖 | `bit/byte read past end`(含需求量与剩余量) | ✓ 干净可读 |
+| 长度/计数超卖 | 读前钳制:`resolved size … exceeds remaining`(2026-10-24 起,超界长度不再经 (int) 截断成负/0) | ✓ 干净可读 |
 | 终止符缺失 | 干净 IllegalStateException | ✓ |
 | 全前缀截断 | 全部拒绝 | ✓ |
-| 0 字节元素 × 大计数 | 线性空转(count 无上限) | 建议元素耗 0 字节即 break(untilEnd 已有同款防护) |
-| 递归无界 | 输入长度约束深度,异常终止 | ✓(无显式上限,可接受) |
+| 0 字节元素 × 大计数 | count 驱动:空实体为既有合法语义(round-trip 测试锁定),元素数上限 2^20 封顶内存放大(2026-10-24);sentinel/sentinelOn 驱动:零进展立即报错(此前纯死循环) | ✓ 已闭环 |
+| 递归无界 | 深度上限 64,超限干净 IllegalStateException(2026-10-24,防 SOE 绕过 catch(Exception)) | ✓ 已闭环 |
 | 计数 = -1 | 空列表(null 数组,Kafka 语义) | ✓ 设计语义 |
 | 计数 < -1 | 干净报错 | ✓ |
 | 超大帧(>2^31 bit) | 未设防 | 与已知「无上限」缺口一致 |
@@ -67,7 +67,7 @@
 
 ## 七、真实协议验证(2026-10-22 第二轮)
 
-`netproto-core/src/test/java/com/netproto/protocols/real/` 下 **18 个协议族 / 46 个用例**,全部权威字节向量断言 + round-trip,全仓 255 个测试全绿(core 216 / web 16 / demo 23):
+`netproto-core/src/test/java/com/netproto/protocols/real/` 下 **18 个协议族 / 46 个用例**,全部权威字节向量断言 + round-trip(测试计数以 README 为准,2026-10-24 全仓 284 绿:core 222 / web 30 / demo 32):
 
 | 领域 | 协议 | 向量来源 | 表达方式 |
 |---|---|---|---|

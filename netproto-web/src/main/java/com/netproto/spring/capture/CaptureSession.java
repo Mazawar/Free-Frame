@@ -64,6 +64,9 @@ public class CaptureSession {
     private final List<Runnable> closeCallbacks = new CopyOnWriteArrayList<>();
 
     private final ArrayBlockingQueue<Frame> pending = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    /** 解码线程代际:网卡异常自终止 + 亚秒级 restart 的窗口里,旧解码线程会读到新 running=true
+     *  而"复活"(与新线程并存,stop 的 join/interrupt 从此管不到它)。代际令牌让被取代线程限期退出。 */
+    private final AtomicInteger generation = new AtomicInteger();
     /** 订阅者(SSE 连接)计数:页面专属会话凭它判定"页面还开着吗"。 */
     private final AtomicInteger viewers = new AtomicInteger();
     private volatile long noViewerSince = System.currentTimeMillis();
@@ -97,8 +100,19 @@ public class CaptureSession {
         }
         PcapHandle h = NetIfaces.find(iface).openLive(
                 snaplen, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10);
-        if (bpf != null && !bpf.isBlank()) {
-            h.setFilter(bpf, BpfProgram.BpfCompileMode.OPTIMIZE);
+        try {
+            if (bpf != null && !bpf.isBlank()) {
+                h.setFilter(bpf, BpfProgram.BpfCompileMode.OPTIMIZE);
+            }
+        } catch (Exception e) {
+            // openLive 已成功而 setFilter 失败(非法表达式):必须回收句柄,
+            // 否则每次非法 BPF start 都泄漏一个混杂模式 native pcap_t(可刷到驱动句柄耗尽)
+            try {
+                h.close();
+            } catch (Exception closeFailure) {
+                // 回收失败不掩盖原始错误
+            }
+            throw e;
         }
         this.handle = h;
         this.currentIface = iface;
@@ -113,8 +127,9 @@ public class CaptureSession {
         lastStats = null;
         running.set(true);
 
-        // 解码线程先起(队列先有消费者),抓包线程再产
-        decodeThread = new Thread(this::decodeLoop, "netproto-decode-" + id);
+        // 解码线程先起(队列先有消费者),抓包线程再产;代际令牌取代同会话任何旧解码线程
+        int gen = generation.incrementAndGet();
+        decodeThread = new Thread(() -> decodeLoop(gen), "netproto-decode-" + id);
         decodeThread.start();
         captureThread = new Thread(() -> captureLoop(h, iface), "netproto-capture-" + id);
         captureThread.start();
@@ -160,17 +175,19 @@ public class CaptureSession {
     /** 有界入队:满则丢最旧保最新(实时视图语义),丢弃计数。 */
     private void enqueue(String iface, byte[] raw, long ts) {
         Frame f = new Frame(iface, raw, ts);
-        if (!pending.offer(f)) {
+        // 双生产者(capture 回调 + inject)下"poll 后必有空位"不成立:另一生产者可能抢先占位。
+        // 循环重试保证最终入队,丢弃计数与实际挤掉的帧一一对应。
+        while (!pending.offer(f)) {
             pending.poll();
             queuedDropped.incrementAndGet();
-            pending.offer(f);   // poll 之后必有空位
         }
     }
 
-    /** 解码线程体:running=false 且队列排空后退出;单线程串行消费,帧序天然保序。 */
-    private void decodeLoop() {
+    /** 解码线程体:running=false 且队列排空后退出;单线程串行消费,帧序天然保序。
+     *  被新一代 start 取代(异常终止后快速重启)时也退出,防线程复活累积。 */
+    private void decodeLoop(int myGen) {
         try {
-            while (running.get() || !pending.isEmpty()) {
+            while (generation.get() == myGen && (running.get() || !pending.isEmpty())) {
                 Frame f = pending.poll(100, TimeUnit.MILLISECONDS);
                 if (f != null) {
                     process(f);
@@ -193,7 +210,12 @@ public class CaptureSession {
         Thread worker = decodeThread;
         if (running.get() && worker != null && worker.isAlive()) {
             try {
-                pending.put(new Frame(iface, raw, tsMillis));
+                // 限时入队而非无限 put:stop 超时中断解码线程后队列可能满且再无消费者,
+                // put 会永久阻塞 HTTP 线程(每重复一次挂掉一个 Tomcat worker)
+                if (!pending.offer(new Frame(iface, raw, tsMillis), 2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException(
+                            "inject queue full (decoder backlogged or session stopping) — retry later");
+                }
                 return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -251,6 +273,8 @@ public class CaptureSession {
         if (decodeThread != null && decodeThread.isAlive()) {
             decodeThread.interrupt();
         }
+        // 丢弃本代残帧并放行仍在限时 offer 上等待的注入线程(stop 语义:停后帧不再入环)
+        pending.clear();
     }
 
     private static void joinQuietly(Thread t, long ms) {
@@ -304,14 +328,36 @@ public class CaptureSession {
         return null;
     }
 
+    /** 对已有摘要直接重解码(信号视图等批量场景):调用方已持有 FrameSummary,
+     *  免于 detail() 按 seq 全环线性回查 —— 后者单点是 O(ring),批量调用会持锁放大成 O(n×ring)。
+     *  开位区间:信号视图靠 fieldRanges 判定字段是否真实解析(presentIf 缺席的默认值是假值)。 */
+    public DecodedPacket decodeFrom(FrameSummary s) {
+        return decoder.decode(s.raw(), s.iface(), s.ts(), (int) s.seq(), true);
+    }
+
+    /** 当前订阅者(SSE 连接)数:每会话连接数上限防护用。 */
+    public int listenerCount() {
+        return viewers.get();
+    }
+
     /** 最近 n 帧摘要(新→旧)。 */
     public List<FrameSummary> recent(int limit) {
+        return recent(limit, 0L);
+    }
+
+    /** 最近 n 帧摘要(新→旧);since>0 时只取 seq&gt;since 的帧(增量补拉),
+     *  遇到更旧的即停(环内 seq 升序)—— 断线重连不再整环重发。 */
+    public List<FrameSummary> recent(int limit, long since) {
         synchronized (ring) {
             int n = Math.min(Math.max(limit, 0), ring.size());
             List<FrameSummary> out = new ArrayList<>(n);
             java.util.Iterator<FrameSummary> it = ring.descendingIterator();
             for (int i = 0; i < n && it.hasNext(); i++) {
-                out.add(it.next());
+                FrameSummary s = it.next();
+                if (since > 0 && s.seq() <= since) {
+                    break;
+                }
+                out.add(s);
             }
             return out;
         }

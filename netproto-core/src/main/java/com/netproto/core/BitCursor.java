@@ -53,8 +53,8 @@ public final class BitCursor {
     /** 从当前位偏移读 size 位为字节数组(BYTES/STRING/NESTED 用)。对齐快路径走 arraycopy;
      *  非对齐走位级读取(跨字节位移),保证非字节对齐的 BYTES 字段取值正确。 */
     public byte[] readBytes(int size) {
-        if (size % 8 != 0) {
-            throw new IllegalArgumentException("byte read needs a multiple of 8 bits, got " + size);
+        if (size < 0 || size % 8 != 0) {
+            throw new IllegalArgumentException("byte read needs a non-negative multiple of 8 bits, got " + size);
         }
         if ((long) bitPos + size > totalBits) {
             throw new IllegalStateException("byte read past end: need " + size / 8 + " bytes at bit offset "

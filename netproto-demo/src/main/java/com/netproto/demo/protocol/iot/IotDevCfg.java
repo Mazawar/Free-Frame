@@ -30,6 +30,7 @@ public class IotDevCfg {
     @ProtocolField(order = 3, size = 16, label = "保留")
     private int reserved;
 
-    @ProtocolField(order = 4, size = 16, label = "CRC")
+    /** 固定 55AA 占位,非计算 CRC——真实实现应走 @ChecksumField。 */
+    @ProtocolField(order = 4, size = 16, label = "CRC(占位)")
     private int crc = 0x55AA;
 }

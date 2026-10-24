@@ -70,11 +70,21 @@ public class SessionManager {
         }
     }
 
-    /** Spring @Bean 销毁回调(方法名自动推断)。 */
+    /** Spring @Bean 销毁回调(方法名自动推断)。
+     *  必须关停全部会话:采集/解码线程非 daemon,h.loop(-1) 只有 breakLoop 能醒——
+     *  不关的话运行中关停应用,两个 netproto-capture-* 线程会让 JVM 永不退出(容器被 SIGKILL)。 */
     public void shutdown() {
         if (sweeper != null) {
             sweeper.shutdownNow();
         }
+        for (CaptureSession s : List.copyOf(sessions.values())) {
+            try {
+                s.close();
+            } catch (Exception e) {
+                log.warn("session '{}' failed to close during shutdown: {}", s.id(), e.getMessage());
+            }
+        }
+        sessions.clear();
     }
 
     /** default 会话懒创建:旧端点(/capture/start、/stream 等)的固定落点。 */

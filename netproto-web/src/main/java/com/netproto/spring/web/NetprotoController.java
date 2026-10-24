@@ -342,6 +342,12 @@ public class NetprotoController {
     /** 表达式长度上限:单次编译本就微秒级,纯防误用本端点作压力入口。 */
     private static final int MAX_BPF_CHARS = 2048;
 
+    /** 并发 BPF 校验上限(理由见 bpfValidate 内注释)。 */
+    private static final int MAX_CONCURRENT_BPF_VALIDATIONS = 4;
+
+    private final java.util.concurrent.atomic.AtomicInteger bpfValidations =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     /** 离线校验:死句柄 pcap_compile,与真实抓包同一编译器 —— 「通过=可用」,
      *  错误信息即 libpcap 原文(如 "syntax error in filter expression")。 */
     @GetMapping("/bpf/validate")
@@ -350,7 +356,19 @@ public class NetprotoController {
             throw new IllegalArgumentException("bpf expression too long: " + expr.length()
                     + " chars (max " + MAX_BPF_CHARS + ")");
         }
-        BpfValidator.Result r = bpf.validate(expr);
+        // 并发闸:校验串行复用一把离线句柄锁,含主机名的表达式编译期还要做阻塞 DNS——
+        // 不限并发时,数百个慢请求会把 Tomcat 线程池全部钉在锁队列上
+        if (bpfValidations.incrementAndGet() > MAX_CONCURRENT_BPF_VALIDATIONS) {
+            bpfValidations.decrementAndGet();
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "too many concurrent bpf validations — retry shortly");
+        }
+        BpfValidator.Result r;
+        try {
+            r = bpf.validate(expr);
+        } finally {
+            bpfValidations.decrementAndGet();
+        }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", r.ok());
         if (r.error() != null) {
@@ -430,8 +448,9 @@ public class NetprotoController {
     }
 
     @GetMapping("/packets")
-    public List<Map<String, Object>> packets(@RequestParam(defaultValue = "100") int limit) {
-        return packetRows(sessions.defaultSession(), limit);
+    public List<Map<String, Object>> packets(@RequestParam(defaultValue = "100") int limit,
+                                             @RequestParam(required = false) Long since) {
+        return packetRows(sessions.defaultSession(), limit, since);
     }
 
     /** 单帧完整详情(树/字段/字节区间/hex):摘要不常驻解析树,按需重解码(Wireshark 点击时解析)。 */
@@ -520,8 +539,9 @@ public class NetprotoController {
 
     @GetMapping("/sessions/{id}/packets")
     public List<Map<String, Object>> sessionPackets(@PathVariable String id,
-                                                    @RequestParam(defaultValue = "100") int limit) {
-        return packetRows(sessionOr404(id), limit);
+                                                    @RequestParam(defaultValue = "100") int limit,
+                                                    @RequestParam(required = false) Long since) {
+        return packetRows(sessionOr404(id), limit, since);
     }
 
     @GetMapping("/sessions/{id}/packet/{seq}")
@@ -591,10 +611,9 @@ public class NetprotoController {
             if (!sum.layerIds().contains(proto)) {
                 continue;
             }
-            DecodedPacket p = session.detail(sum.seq());
-            if (p == null) {
-                continue;
-            }
+            // 直接用摘要重解码:detail(seq) 会按 seq 全环线性回查(O(ring)/点、持 ring 锁),
+            // 批量 5000 点即冻结采集管线;摘要里 raw/ts 本就在手
+            DecodedPacket p = session.decodeFrom(sum);
             for (DecodedPacket.DecodedLayer l : p.layers()) {
                 if (!l.id().equals(proto) || !l.fieldRanges().containsKey(field)) {
                     continue;
@@ -678,10 +697,11 @@ public class NetprotoController {
         return iface;
     }
 
-    private static List<Map<String, Object>> packetRows(CaptureSession session, int limit) {
+    private static List<Map<String, Object>> packetRows(CaptureSession session, int limit, Long since) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (FrameSummary s : session.recent(limit)) {
-            out.add(row(s));
+        long s = since == null ? 0L : Math.max(since, 0L);
+        for (FrameSummary f : session.recent(limit, s)) {
+            out.add(row(f));
         }
         return out;
     }
@@ -720,6 +740,18 @@ public class NetprotoController {
     /** 会话删除信号:写线程收到后发 session-closed 事件并收尾(与数据同通道,天然串行)。 */
     private static final Object SESSION_CLOSED = new Object();
 
+    /** SSE 全局/单会话连接上限:每连接独占一个写线程 + 2048 槽队列,半开连接的写线程
+     *  只有内核 TCP 超时能解 —— 不封顶则并发开流可刷到 native thread 耗尽。 */
+    private static final int MAX_SSE_CONNECTIONS = 64;
+    private static final int MAX_SSE_PER_SESSION = 16;
+
+    /** SSE 连接生命周期上限:半开 TCP(客户端掉线/NAT 超时)只有 async 超时能兜底回收
+     *  订阅计数(否则 viewers 悬挂、会话躲过空闲回收数十分钟);浏览器 EventSource 自动重连。 */
+    private static final long SSE_TIMEOUT_MS = 5 * 60_000L;
+
+    private final java.util.concurrent.atomic.AtomicInteger sseConnections =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     /**
      * SSE 实时推送(事件名 packet,断线由浏览器自动重连;服务端每 15s 发具名 ping 事件)。
      * 旧端点:固定订阅 default 会话。
@@ -741,10 +773,17 @@ public class NetprotoController {
 
     /** 会话版 SSE:GET /sessions/{id}/stream(事件格式与 /stream 完全一致)。 */
     private SseEmitter openStream(CaptureSession session) {
-        SseEmitter emitter = new SseEmitter(0L);
+        if (sseConnections.incrementAndGet() > MAX_SSE_CONNECTIONS
+                || session.listenerCount() >= MAX_SSE_PER_SESSION) {
+            sseConnections.decrementAndGet();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "too many stream connections (max " + MAX_SSE_CONNECTIONS
+                            + " global / " + MAX_SSE_PER_SESSION + " per session)");
+        }
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         BlockingQueue<Object> queue = new ArrayBlockingQueue<>(2048);
         var writer = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "netproto-sse-writer");
+            Thread t = new Thread(r, "netproto-sse-writer-" + session.id());
             t.setDaemon(true);
             return t;
         });
@@ -757,6 +796,7 @@ public class NetprotoController {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
+            sseConnections.decrementAndGet();
             session.removeListener(listener);
             session.removeCloseCallback(closeCallback);
             ping.cancel(false);
@@ -814,6 +854,15 @@ public class NetprotoController {
 
     // ---- 报文注入(不经过网卡:直接进解析+展示管线) ----
 
+    /** 注入/发包字节上限:JSON body 不受 maxPostSize 约束,无上限则单请求可瞬时
+     *  分配任意大小内存(1GB hex → String + byte[] + 解析副本 1.5GB+ 驻留)。 */
+    private static final int MAX_INJECT_BYTES = 128 * 1024;
+
+    /** /send 结构上限:层数/单层字段数/单值长度(同属"无上限 JSON"攻击面)。 */
+    private static final int MAX_SEND_LAYERS = 16;
+    private static final int MAX_SEND_FIELDS = 64;
+    private static final int MAX_FIELD_CHARS = 8192;
+
     /** {hex: "aa bb ..", iface?: "inject"} 注入原始字节帧,页面经 SSE 实时看到解析结果。 */
     @PostMapping("/inject")
     public Map<String, Object> inject(@RequestBody Map<String, String> body) {
@@ -824,6 +873,10 @@ public class NetprotoController {
         String hex = body.getOrDefault("hex", "").replace(" ", "").replace("\n", "");
         if (hex.isEmpty() || (hex.length() & 1) != 0) {
             throw new IllegalArgumentException("hex is required (even-length hex string)");
+        }
+        if (hex.length() / 2 > MAX_INJECT_BYTES) {
+            throw new IllegalArgumentException("inject frame too large: " + hex.length() / 2
+                    + " bytes (max " + MAX_INJECT_BYTES + ")");
         }
         byte[] raw = new byte[hex.length() / 2];
         try {
@@ -903,6 +956,10 @@ public class NetprotoController {
         if (layerSpecs == null || layerSpecs.isEmpty()) {
             throw new IllegalArgumentException("layers is required (outer → inner)");
         }
+        if (layerSpecs.size() > MAX_SEND_LAYERS) {
+            throw new IllegalArgumentException("too many layers: " + layerSpecs.size()
+                    + " (max " + MAX_SEND_LAYERS + ")");
+        }
         List<Object> layers = new ArrayList<>();
         for (Map<String, Object> spec : layerSpecs) {
             layers.add(bindLayer((String) spec.get("protocol"), (Map<String, Object>) spec.get("fields")));
@@ -933,6 +990,16 @@ public class NetprotoController {
             throw new IllegalArgumentException("unknown protocol: " + protocolId);
         }
         Map<String, Object> src = fields == null ? Map.of() : fields;
+        if (src.size() > MAX_SEND_FIELDS) {
+            throw new IllegalArgumentException("too many fields on protocol '" + protocolId
+                    + "': " + src.size() + " (max " + MAX_SEND_FIELDS + ")");
+        }
+        for (Object v : src.values()) {
+            if (v instanceof String s && s.length() > MAX_FIELD_CHARS) {
+                throw new IllegalArgumentException("field value too long: " + s.length()
+                        + " chars (max " + MAX_FIELD_CHARS + ")");
+            }
+        }
         Map<String, Object> prepared = new LinkedHashMap<>(src);
         // 便捷格式:byte[] 字段接受 hex 字符串(Jackson 默认 Base64,先转换);
         // *Mac 字段接受 "aa:bb:cc:dd:ee:ff";*Ip 字段接受点分十进制。
@@ -977,6 +1044,10 @@ public class NetprotoController {
         String h = hex.replace(" ", "").replace(":", "");
         if (h.length() % 2 != 0) {
             throw new IllegalArgumentException("hex string must have even length: " + hex);
+        }
+        if (h.length() / 2 > MAX_INJECT_BYTES) {
+            throw new IllegalArgumentException("hex payload too large: " + h.length() / 2
+                    + " bytes (max " + MAX_INJECT_BYTES + ")");
         }
         byte[] out = new byte[h.length() / 2];
         for (int i = 0; i < out.length; i++) {

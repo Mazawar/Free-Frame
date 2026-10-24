@@ -102,7 +102,11 @@ async function refreshAll() {
 }
 
 onMounted(() => {
-  timer = window.setInterval(() => { if (signals.value.length) refreshAll() }, 2000)
+  // 弹窗 display-directive="show" 关窗不销毁组件:必须守卫 signalOpen,
+  // 否则关窗后仍按 2s/信号 轮询(每次还带千帧重解码)
+  timer = window.setInterval(() => {
+    if (store.signalOpen && signals.value.length) refreshAll()
+  }, 2000)
 })
 onBeforeUnmount(() => clearInterval(timer))
 watch(() => store.signalOpen, open => { if (open) refreshAll() })

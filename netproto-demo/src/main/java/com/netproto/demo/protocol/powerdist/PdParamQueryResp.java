@@ -29,7 +29,7 @@ public class PdParamQueryResp {
     private List<PdParamItem> params = new ArrayList<>(List.of(
             PdParamItem.of(1, 0x3C), PdParamItem.of(2, 0x190)));
 
-    /** 尾随校验和(源协议为固定 55AA 占位,非计算字段)。 */
-    @ProtocolField(order = 3, size = 16, label = "校验和")
+    /** 尾随校验和(源协议为固定 55AA 占位,非计算字段——真实实现应走 @ChecksumField)。 */
+    @ProtocolField(order = 3, size = 16, label = "校验和(占位)")
     private int checksum = 0x55AA;
 }

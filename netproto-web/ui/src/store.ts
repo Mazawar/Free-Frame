@@ -1,6 +1,6 @@
 import { reactive, computed } from 'vue'
 import type { Iface, Packet, PacketSummary, ProtocolMeta } from './types'
-import { api } from './api'
+import { api, withToken } from './api'
 
 /** 前端缓冲上限兜底值;实际以后端 ring-size 为准(/config 拉取,见 bootstrap)。 */
 const DEFAULT_MAX_PACKETS = 100_000
@@ -33,11 +33,32 @@ export const store = reactive({
   config: { ringSize: DEFAULT_MAX_PACKETS, ringBytes: 0, snaplen: 0, rootProtocol: '' },
 })
 
-/** 页面身份就绪:sessionStorage 有就复用(刷新同身份),没有就生成 UUID。 */
+/** 页面身份就绪:sessionStorage 有就复用(刷新同身份),没有就生成 UUID。
+ *  校验存量值的格式(被污染/旧格式直接换新):它会被拼进 URL,不放宽到任意字符串。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** UUID v4:crypto.randomUUID 仅安全上下文(https / localhost)可用 —— 内网裸 http
+ *  (抓包观测台的典型部署形态)下它是 undefined,直接调用会抛 TypeError 致整页白屏。
+ *  降级路径:getRandomValues(非安全上下文仍可用)手拼;再降级 Math.random(古老环境)。 */
+function uuid(): string {
+  const c = globalThis.crypto
+  if (c?.randomUUID) return c.randomUUID()
+  const b = new Uint8Array(16)
+  if (c?.getRandomValues) {
+    c.getRandomValues(b)
+  } else {
+    for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256)
+  }
+  b[3] = (b[3]! & 0x0f) | 0x40   // version 4
+  b[8] = (b[8]! & 0x3f) | 0x80   // variant 10xx
+  const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 function ensureSessionIdentity() {
   let id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) {
-    id = crypto.randomUUID()
+  if (!id || !UUID_RE.test(id)) {
+    id = uuid()
     sessionStorage.setItem(SESSION_KEY, id)
   }
   store.sessionId = id
@@ -170,7 +191,7 @@ export function connectStream() {
   lastPing = Date.now()
   if (flushTimer === undefined) flushTimer = window.setInterval(flush, 150)
   if (watchdogTimer === undefined) watchdogTimer = window.setInterval(watchdog, 5000)
-  es = new EventSource(`/api/netproto/sessions/${encodeURIComponent(store.sessionId)}/stream`)
+  es = new EventSource(withToken(`/api/netproto/sessions/${encodeURIComponent(store.sessionId)}/stream`))
   es.onopen = () => {
     store.sse = 'open'
     lastPing = Date.now()
@@ -195,12 +216,14 @@ export function connectStream() {
 }
 
 /**
- * 连接建立后补拉一次会话环形缓冲:兜住「恢复已完成、SSE 尚未 open」与
- * 「断线重连期间」两个窗口里错过的帧。addPackets 幂等(seq 去重),重复无害。
+ * 连接建立后补拉会话环形缓冲:兜住「恢复已完成、SSE 尚未 open」与「断线重连期间」
+ * 两个窗口里错过的帧。增量(since=本页已见最大 seq):断线重连只拉缺口,
+ * 不再整环重拉(满环 10 万条约 30MB JSON,主线程解析冻结数秒,且每次重连都付一遍)。
+ * addPackets 幂等(seq 去重),与 SSE 事件交叠无害。
  */
 async function backfillAfterOpen() {
   try {
-    const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000)
+    const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000, store.captured)
     pending.push(...recent.reverse())
   } catch { /* 会话已被回收等:忽略,SSE 仍在线 */ }
 }

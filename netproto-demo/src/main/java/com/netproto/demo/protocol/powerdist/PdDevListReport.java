@@ -29,7 +29,7 @@ public class PdDevListReport {
     private List<PdDevStatus> devices = new ArrayList<>(List.of(
             PdDevStatus.of(1, 0), PdDevStatus.of(2, 0)));
 
-    /** 尾随校验和(源协议为固定 55AA 占位)。 */
-    @ProtocolField(order = 3, size = 16, label = "校验和")
+    /** 尾随校验和(源协议为固定 55AA 占位,非计算字段——真实实现应走 @ChecksumField)。 */
+    @ProtocolField(order = 3, size = 16, label = "校验和(占位)")
     private int checksum = 0x55AA;
 }

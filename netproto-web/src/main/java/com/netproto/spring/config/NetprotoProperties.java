@@ -39,6 +39,10 @@ public class NetprotoProperties {
     /** 并发采集会话上限(含 default 兼容会话)。每会话占一个 native 捕获句柄 + 两条线程,上限护资源。 */
     private int maxSessions = 4;
 
+    /** API 访问令牌:非空时 /api/netproto/** 全部要求 X-Netproto-Token 头(或 ?token=,EventSource
+     *  无法带自定义头)匹配。默认空 = 不鉴权(demo 本机用法);暴露到不可信网络必须设置。 */
+    private String authToken = "";
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -101,6 +105,14 @@ public class NetprotoProperties {
 
     public void setMaxSessions(int maxSessions) {
         this.maxSessions = maxSessions;
+    }
+
+    public String getAuthToken() {
+        return authToken;
+    }
+
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken == null ? "" : authToken.trim();
     }
 
     public String getUiBasePath() {

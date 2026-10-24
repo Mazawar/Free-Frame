@@ -8,6 +8,17 @@ import java.util.*;
 
 public final class ProtocolCodec<T> implements PacketCodec<T> {
 
+    /** 单个 LIST/TLV 字段的元素数硬上限:恶意 count 字段(可达 2^31-1)× 每元素对象分配
+     *  会把堆打爆,且 OOM 属 Error、绕过各层 catch(Exception) 的优雅降级 —— 超限按解析失败处理。 */
+    private static final int MAX_LIST_ELEMENTS = 1 << 20;
+
+    /** NESTED/LIST 递归解码深度上限:自引用协议定义 + 构造报文可叠出任意深度,
+     *  StackOverflowError 同样绕过 catch(Exception);64 层已远超任何真实协议栈。 */
+    private static final int MAX_DECODE_DEPTH = 64;
+
+    /** 每线程递归深度(须跨 codec 实例共享:NESTED/LIST 下降会换实例,单实例 ThreadLocal 数不到)。 */
+    private static final ThreadLocal<int[]> DEPTH = ThreadLocal.withInitial(() -> new int[1]);
+
     private final Class<T> clazz;
     private final List<FieldInfo> fixedFields; // 按 order 排序
     private final FieldInfo payloadField;      // @Payload 字段(向后兼容)
@@ -169,13 +180,19 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                                 + " is not a @Protocol entity");
             }
                 validateElementBoundary(fi.elementClass);
-                // countUnit=BYTES:元素须全定长(个数 = 字节数/元素字节)
+                // countUnit=BYTES:元素须全定长且至少有字段(零字段元素 → 解码期除零)
                 if (fi.countUnit == com.netproto.annotation.CountUnit.BYTES) {
+                    long elemBits;
                     try {
-                        fixedBitSize(fi.elementClass);
+                        elemBits = fixedBitSize(fi.elementClass);
                     } catch (IllegalStateException e) {
                         throw new IllegalArgumentException(
                                 "field '" + fi.name + "': countUnit=BYTES requires fixed-size elements", e);
+                    }
+                    if (elemBits <= 0) {
+                        throw new IllegalArgumentException(
+                                "field '" + fi.name + "': countUnit=BYTES requires fixed-size elements ("
+                                        + fi.elementClass.getName() + " declares no @ProtocolField — size 0)");
                     }
                 }
             }
@@ -314,6 +331,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
     }
 
     public T deserialize(byte[] rawData, int offset, int length) {
+        int[] depth = DEPTH.get();
+        if (depth[0] >= MAX_DECODE_DEPTH) {
+            throw new IllegalStateException("protocol nesting deeper than " + MAX_DECODE_DEPTH
+                    + " (cyclic protocol definition or malformed frame?)");
+        }
+        depth[0]++;
         try {
             T obj = ctor.newInstance();
             DecodeState s = st();
@@ -333,10 +356,12 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 if (fi.payloadField) {
                     // 长度驱动 @Payload:按 lengthField 截断读;尾随字段在循环内继续,
                     // 分派起点(lastHeaderBits)停在 body 起点(见循环后)。
-                    long psize = resolveSize(fi, obj, ctx, true, length * 8 - cursor.bitOffset(), null);
-                    if (psize < 0 || psize % 8 != 0) {
+                    int availBits = length * 8 - cursor.bitOffset();
+                    long psize = resolveSize(fi, obj, ctx, true, availBits, null);
+                    if (psize < 0 || psize % 8 != 0 || psize > availBits) {
                         throw new IllegalStateException("payload field '" + fi.name
-                                + "': lengthField resolves to non-whole-byte size " + psize);
+                                + "': lengthField resolves to invalid size " + psize
+                                + " bits (negative, non-whole-byte or beyond remaining " + availBits + ")");
                     }
                     byte[] pval = cursor.readBytes((int) psize);   // readBytes 收位(BYTES 语义)
                     fi.field.set(obj, pval);
@@ -359,6 +384,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     // 故把剩余位数传给 resolveSize(其余路径忽略此值)。
                     int remainingBits = length * 8 - cursor.bitOffset();
                     long size = resolveSize(fi, obj, ctx, true, remainingBits, null);
+                    // 钳制后再转 int:超界长度字段此前经 (int) 截断可变负数
+                    // (NegativeArraySizeException)或 0(静默读空)。sentinel 路径不消费 size,跳过。
+                    if (!fi.hasSentinel() && (size < 0 || size > remainingBits)) {
+                        throw new IllegalStateException("field '" + fi.name + "': resolved size "
+                                + size + " bits exceeds remaining " + remainingBits
+                                + " bits (malformed length field?)");
+                    }
                     value = readValue(fi, cursor, (int) size, ctx);
                 }
                 int endBit = cursor.bitOffset();
@@ -387,6 +419,8 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
             return obj;
         } catch (Exception e) {
             throw new RuntimeException("Failed to deserialize " + clazz.getName(), e);
+        } finally {
+            depth[0]--;
         }
     }
 
@@ -844,6 +878,24 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         }
     }
 
+    /** LIST 循环零进展保护:元素不消耗任何位时游标原地踏步、peek 值永不变 → 纯死循环
+     *  (连异常都不抛,解码线程 100% CPU 永久挂死)。untilEnd 路径一直有同款 break,此处推广到全部路径。 */
+    private static void requireProgress(FieldInfo fi, int elemBits) {
+        if (elemBits <= 0) {
+            throw new IllegalStateException("LIST field '" + fi.name + "': element consumed "
+                    + elemBits + " bits (empty element or all fields skipped by presentIf?)"
+                    + " — cursor cannot advance, aborting decode");
+        }
+    }
+
+    /** LIST 元素数上限:防恶意 count/超长缓冲把堆打爆(OOM 是 Error,绕过 catch(Exception) 降级)。 */
+    private static void checkListRoom(FieldInfo fi, int size) {
+        if (size >= MAX_LIST_ELEMENTS) {
+            throw new IllegalStateException("LIST field '" + fi.name + "': exceeds "
+                    + MAX_LIST_ELEMENTS + " elements (malformed count or missing sentinel?)");
+        }
+    }
+
     /** 按 n 字节反转(LITTLE endian 整数与线上位序互转,size ≤ 64 位)。 */
     private static long reverseBytes(long v, int n) {
         long out = 0;
@@ -910,15 +962,19 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                             cursor.skipBits(fi.sentinelOnSize);  // 消费结束标记
                             break;
                         }
+                        checkListRoom(fi, list.size());
                         int before = cursor.bitOffset();
                         Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
+                        int elemBits = elementCodec.lastConsumedBits();
+                        requireProgress(fi, elemBits);
                         list.add(elem);
-                        cursor.skipBits(elementCodec.lastConsumedBits());
+                        cursor.skipBits(elemBits);
                         putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
                     }
                 } else if (fi.untilEnd) {
                     // 耗尽驱动:读到本层缓冲区末尾为止(元素须自定边界,注册期已校验)
                     while (cursor.bitOffset() < st().layerEndBits) {
+                        checkListRoom(fi, list.size());
                         int before = cursor.bitOffset();
                         Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
                         list.add(elem);
@@ -948,10 +1004,14 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                         count = (int) ((count * 8L + elemBits - 1) / elemBits);
                     }
                     for (int i = 0; i < count; i++) {
+                        checkListRoom(fi, i);
                         int before = cursor.bitOffset();
                         Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
+                        int elemBits = elementCodec.lastConsumedBits();
+                        // 0 位元素(空实体)是既有语义(round-trip 测试锁定):不抛错,
+                        // 恶意大 count 的内存放大仅靠上面的元素数上限封顶
                         list.add(elem);
-                        cursor.skipBits(elementCodec.lastConsumedBits());
+                        cursor.skipBits(elemBits);
                         putElemRange(fi.name, i, before, cursor.bitOffset());
                     }
                 }
@@ -974,6 +1034,7 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                 cursor.skipBits(8);  // 消费 sentinel
                 break;
             }
+            checkListRoom(fi, list.size());
             int type = (int) cursor.readBits(8);
             int length = (int) cursor.readBits(8);
             String className = fi.dispatchMap.get(type);
@@ -1009,10 +1070,13 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
                     throw new IllegalStateException(
                             "sentinel field " + fi.name + ": reached end of data without marker");
                 }
+                checkListRoom(fi, list.size());
                 int before = cursor.bitOffset();
                 Object elem = elementCodec.deserialize(cursor.bytes(), cursor.byteOffset(), cursor.remainingBytes());
+                int elemBits = elementCodec.lastConsumedBits();
+                requireProgress(fi, elemBits);
                 list.add(elem);
-                cursor.skipBits(elementCodec.lastConsumedBits());
+                cursor.skipBits(elemBits);
                 putElemRange(fi.name, list.size() - 1, before, cursor.bitOffset());
             }
             return list;
@@ -1222,8 +1286,11 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         return FieldType.INT;
     }
 
+    /** 并发安全缓存:解码线程 + HTTP 线程会同时首刷同一嵌套类型,裸 HashMap 并发 put 可丢条目/损坏桶。
+     *  用 putIfAbsent 而非 computeIfAbsent:构造不重入,竞赛时容忍多构造一次,天然规避重入限制。 */
     @SuppressWarnings("rawtypes")
-    private static final Map<Class<?>, ProtocolCodec> NESTED_CACHE = new HashMap<>();
+    private static final Map<Class<?>, ProtocolCodec> NESTED_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     @SuppressWarnings("unchecked")
     private ProtocolCodec<?> codecFor(Class<?> type) {
@@ -1231,9 +1298,9 @@ public final class ProtocolCodec<T> implements PacketCodec<T> {
         if (cached != null) {
             return cached;
         }
-        ProtocolCodec<?> c = new ProtocolCodec<>(type);
-        NESTED_CACHE.put(type, c);
-        return c;
+        ProtocolCodec<?> created = new ProtocolCodec<>(type);
+        ProtocolCodec<?> winner = NESTED_CACHE.putIfAbsent(type, created);
+        return winner != null ? winner : created;
     }
 
     /** 解析 dispatch 类名:简单名按 declaringClass 所在包,全限定名直接加载。 */

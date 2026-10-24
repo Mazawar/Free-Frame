@@ -92,13 +92,15 @@ function countPacket(p: PacketSummary, delta: number) {
   }
 }
 
-/** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用 */
-export function addPackets(batch: PacketSummary[]) {
+/** 批量入口:拼新数组后整体替换(一次依赖触发),高流量下由 SSE 定时合并调用。
+ *  allowReset=false(补拉路径)不触发「批首 seq==1」重置:环真的重启时,实时帧
+ *  事件自己会带 seq 1 走重置;补拉迟到落地时误重置会整表清空重挂载(滚动位置丢失)。 */
+export function addPackets(batch: PacketSummary[], allowReset = true) {
   if (batch.length === 0) return
   // 后端重建:环形重新从 seq 1 计数(批首 == 1 而本页已有更高 seq)→ 清旧帧防混排。
   // 用「批首为 1」而非「严格回退」判定:重连补拉时批首往往 < captured(环未淘汰),
   // 严格回退会把整个缓冲误清一遍。
-  if (store.captured > 1 && batch[0]!.seq === 1) {
+  if (allowReset && store.captured > 1 && batch[0]!.seq === 1) {
     store.packets = []
     counts.clear()
     store.captured = 0
@@ -198,6 +200,10 @@ export function connectStream() {
     void backfillAfterOpen()
   }
   es.addEventListener('ping', () => { lastPing = Date.now() })
+  // 帧事件同样是存活信号:高流量下连接队列(2048)可能被帧挤满,15s 的 ping 会被
+  // 非阻塞 offer 挤掉 —— 只认 ping 会让 35s 看门狗误判连接死亡、强制重连,
+  // 重连补拉又与重置启发式竞态导致整表重挂载(滚动位置丢失)
+  es.addEventListener('packet', () => { lastPing = Date.now() })
   es.addEventListener('session-closed', () => {
     // 会话被删除(清扫回收/后端重启):身份保留,下次采集重新注册
     es?.close()
@@ -224,7 +230,7 @@ export function connectStream() {
 async function backfillAfterOpen() {
   try {
     const recent = await api.sessionPackets(store.sessionId, store.config.ringSize || 100_000, store.captured)
-    pending.push(...recent.reverse())
+    addPackets(recent.reverse(), false)   // 补拉永不触发重置(见 addPackets 注释)
   } catch { /* 会话已被回收等:忽略,SSE 仍在线 */ }
 }
 

@@ -14,7 +14,6 @@ let healTimer: number | undefined
 function heal() {
   if (rows.value.length === 0) return
   tableKey.value++
-  nextTick(captureScrollEl)   // 表格重建后虚拟滚动容器是全新元素
 }
 
 function scheduleHeal() {
@@ -90,8 +89,6 @@ const rowProps = (r: PacketSummary) => ({
 onMounted(() => {
   if (rows.value.length > 0) {
     nextTick(heal)   // 恢复/SSE 先于 bootstrap 到达:mount 中测量不可靠,次帧重建
-  } else {
-    nextTick(captureScrollEl)
   }
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('resize', scheduleHeal)
@@ -108,16 +105,11 @@ function t0() {
 }
 
 // ---- 跟随滚动(同 Wireshark live-scroll):仅当用户停在顶部时随新帧回顶;
-// 正在翻看历史时不拽回 —— 列表新→旧,顶部=最新。虚拟滚动容器在表格内部,重建后需重捕获。 ----
-let scrollEl: HTMLElement | null = null
-
-function captureScrollEl() {
-  const root = (tableRef.value as unknown as { $el?: HTMLElement } | null)?.$el
-  scrollEl = root?.querySelector<HTMLElement>('.v-vl') ?? null
-}
-
+// 正在翻看历史时不拽回 —— 列表新→旧,顶部=最新。判定时实时查询滚动容器
+// (heal 会重建表格,缓存元素句柄会失联指到已卸载节点,其 scrollTop 恒 0 导致永远"在顶部")。 ----
 function followTop(): boolean {
-  return !scrollEl || scrollEl.scrollTop <= 4
+  const el = document.querySelector<HTMLElement>('.v-vl')
+  return !el || el.scrollTop <= 4
 }
 
 watch(() => rows.value.length, (n, old) => {

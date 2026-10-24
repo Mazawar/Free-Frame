@@ -746,8 +746,9 @@ public class NetprotoController {
     private static final int MAX_SSE_PER_SESSION = 16;
 
     /** SSE 连接生命周期上限:半开 TCP(客户端掉线/NAT 超时)只有 async 超时能兜底回收
-     *  订阅计数(否则 viewers 悬挂、会话躲过空闲回收数十分钟);浏览器 EventSource 自动重连。 */
-    private static final long SSE_TIMEOUT_MS = 5 * 60_000L;
+     *  订阅计数(否则 viewers 悬挂、会话躲过空闲回收数十分钟);浏览器 EventSource 自动重连。
+     *  取 30min:足够长以避免活跃页面周期性重连(重连伴随一次补拉),又给泄漏资源封顶。 */
+    private static final long SSE_TIMEOUT_MS = 30 * 60_000L;
 
     private final java.util.concurrent.atomic.AtomicInteger sseConnections =
             new java.util.concurrent.atomic.AtomicInteger();

@@ -75,7 +75,6 @@ onMounted(async () => {
       store.sessionLive = true
     } catch { /* 超上限/服务未起:停留未注册,点「采集」时会再试 */ }
   }
-  connectStream()
   // 配置先行:缓冲上限等显示参数以它为准,恢复裁剪依赖 maxPackets
   try {
     const c = await api.config()
@@ -96,6 +95,10 @@ onMounted(async () => {
   } catch { /* 会话刚被回收:列表为空 */ } finally {
     store.bootstrapped = true
   }
+  // SSE 必须在恢复拉取完成之后才连:否则 onopen 的补拉会与恢复全量拉取并发
+  // (since=0 再拉一整个环,迟到落地时「批首 seq==1」启发式误判环重启 → 整表重置重挂载,
+  // 载入后约一次全量 RTT 时表格闪断、滚动位置丢失)。恢复后连接,补拉走 since 增量,只补真实缺口。
+  connectStream()
 })
 
 // 右键菜单只在输入框内可用(便于粘贴),其余区域禁用
